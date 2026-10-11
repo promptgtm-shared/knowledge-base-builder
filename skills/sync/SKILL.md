@@ -15,15 +15,13 @@ Arguments: `$ARGUMENTS`
 - `--approve-archive`: release a held mass-archive (interactive only).
 - `--budget N`: compile at most N pages now; the rest stay queued for later runs.
 
-Every `kb-builder` command prints JSON (except `site list` and `abort`). Read the fields named below; do not guess. If `kb-builder` itself is missing or fails with "No workspace configured", stop and tell the user to run `/kb-builder:add-site` first.
+Every `kb-builder` command below prints JSON (except `abort`). Read the fields named below; do not guess. If `kb-builder` itself is missing or fails with "No workspace configured", stop and tell the user to run `/kb-builder:add-site` first.
 
 ## 1. Pick the sites
 
-Run `kb-builder site list`. Each line is `id<TAB>sitemap<TAB>flags`. Ignore the `local` site.
-
-- A specific site id: just that site (it must be listed).
-- `all` interactive: every listed site.
-- `all --unattended`: only sites whose flags include `scheduled`. If none, report that and stop.
+- A specific site id: just that site. If `prepare` reports it unknown, show `kb-builder site list` and stop.
+- `all` interactive: the `id` of every entry in `kb-builder site list --json --sitemap-only`.
+- `all --unattended`: the `id` of every entry in `kb-builder site list --json --sitemap-only --scheduled`. If the list is empty, report that no site is scheduled and stop.
 
 ## 2. Prepare, compile and finalize each site
 

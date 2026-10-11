@@ -66,3 +66,21 @@ def test_ensure_local_site(tmp_path: Path) -> None:
     assert site.is_local and site.sitemap_url is None
     assert (tmp_path / "input").is_dir()
     assert config.ensure_local_site(tmp_path).id == "local"
+
+
+def test_cli_site_list_json_filters(tmp_path: Path) -> None:
+    base = ["--root", str(tmp_path)]
+    config.add_site(tmp_path, "https://a.example/sitemap.xml", site_id="a")
+    config.add_site(tmp_path, "https://b.example/sitemap.xml", site_id="b")
+    config.ensure_local_site(tmp_path)
+    ws = config.load_workspace(tmp_path)
+    ws.sites["b"].first_sync_complete = True
+    ws.sites["b"].scheduled = True
+    config.save_workspace(tmp_path, ws)
+
+    def ids(*flags: str) -> list[str]:
+        return [s["id"] for s in json.loads(runner.invoke(app, [*base, "site", "list", "--json", *flags]).output)]
+
+    assert ids() == ["a", "b", "local"]
+    assert ids("--sitemap-only") == ["a", "b"]
+    assert ids("--sitemap-only", "--scheduled") == ["b"]

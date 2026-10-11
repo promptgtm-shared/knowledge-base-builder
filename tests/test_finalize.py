@@ -57,7 +57,7 @@ class Env:
 
     def stage(self, slug: str, topic: str, title: str = "New Title", body: str | None = None) -> None:
         page = self.state.pages[url(slug)]
-        self.queue.append(QueueItem(slug=slug, key=page.key, loc=page.loc, raw_path="", raw_hash=page.content_hash, current_topic=page.topic))
+        self.queue.append(QueueItem(slug=slug, key=page.key, loc=page.loc, raw_path="", raw_hash=page.content_hash))
         self.run_dir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / f"{slug}.md").write_text(body if body is not None else ARTICLE.format(title=title), encoding="utf-8")
         self.manifest.append({"slug": slug, "topic": topic})

@@ -32,6 +32,7 @@ from kb.urls import assign_slug, local_key
 COST_PER_PAGE_USD = 0.004
 DEFAULT_TIME_BUDGET_S = 480.0
 QUEUE_FILE = "queue.json"
+CHECKPOINT_S = 30.0
 
 
 def _clock() -> float:
@@ -44,8 +45,6 @@ class QueueItem(BaseModel):
     loc: str
     raw_path: str
     raw_hash: str
-    current_topic: str | None = None
-    is_update: bool = False
 
 
 class PrepareResult(BaseModel):
@@ -69,6 +68,13 @@ def run_staging(paths: config.SitePaths, run_id: str) -> Path:
     return paths.staging / run_id
 
 
+def load_queue(run_dir: Path) -> list[QueueItem]:
+    queue_file = run_dir / QUEUE_FILE
+    if not queue_file.exists():
+        return []
+    return [QueueItem.model_validate(q) for q in json.loads(queue_file.read_text(encoding="utf-8"))]
+
+
 def _start_run(
     state: SiteState,
     run_id: str,
@@ -78,12 +84,9 @@ def _start_run(
 ) -> None:
     diff = classify(state, entries, full=full)
     approved = approve_archive and approval_matches(state, diff.removed)
-    if diff.archive_held and not approved:
-        state.held_archive = diff.removed
-        removed: list[str] = []
-    else:
-        state.held_archive = []
-        removed = diff.removed
+    hold = diff.archive_held and not approved
+    state.held_archive = diff.removed if hold else []
+    removed = [] if hold else diff.removed
 
     state.progress = FetchProgress(
         run_id=run_id,
@@ -108,6 +111,8 @@ async def _fetch_chunks(
     sitemap_keys = set(progress.sitemap_keys)
     chunk_size = max(policy.concurrency * 5, 10)
     counts = Counter(progress.fetch_counts)
+    taken = state.taken_slugs()
+    last_save = _clock()
 
     async with http.create_client(policy) as client:
         sem = asyncio.Semaphore(policy.concurrency)
@@ -119,10 +124,13 @@ async def _fetch_chunks(
             )
             now = now_fn()
             for e, outcome in zip(entries, outcomes, strict=True):
-                counts[apply_outcome(state, e, outcome, raw_dir, now)] += 1
+                counts[apply_outcome(state, e, outcome, raw_dir, now, taken)] += 1
             progress.remaining = progress.remaining[len(chunk):]
             progress.fetch_counts = dict(counts)
-            save_state(state_path, state)
+            # Checkpoint periodically, not per chunk: state.json is rewritten whole and grows with the site
+            if _clock() - last_save >= CHECKPOINT_S or not progress.remaining or _clock() >= deadline:
+                save_state(state_path, state)
+                last_save = _clock()
 
 
 def _write_queue(paths: config.SitePaths, state: SiteState, run_id: str, budget: int | None) -> tuple[Path, int, int, int]:
@@ -140,8 +148,6 @@ def _write_queue(paths: config.SitePaths, state: SiteState, run_id: str, budget:
             loc=p.loc,
             raw_path=str((paths.raw / f"{p.slug}.md").resolve()),
             raw_hash=p.content_hash or "",
-            current_topic=p.topic,
-            is_update=p.compiled_hash is not None,
         )
         for p in now_pages
     ]
@@ -275,10 +281,9 @@ def plan_batches(root: Path, site_id: str, run_id: str, size: int = 25) -> Batch
     """Split this run's queue into compile batches with absolute input/output paths."""
     site = config.get_site(config.load_workspace(root), site_id)
     run_dir = run_staging(config.WorkspacePaths(root).site(site_id), run_id)
-    queue_file = run_dir / QUEUE_FILE
-    if not queue_file.exists():
+    if not (run_dir / QUEUE_FILE).exists():
         raise config.ConfigError(f"No queue for run {run_id} on '{site_id}'. Run `kb sync prepare` first.")
-    items = [QueueItem.model_validate(q) for q in json.loads(queue_file.read_text(encoding="utf-8"))]
+    items = load_queue(run_dir)
     size = max(size, 1)
     batches = [
         Batch(
@@ -315,6 +320,7 @@ def prepare_local(root: Path, run_id: str | None = None, now_fn=config.utcnow) -
     now = now_fn()
     counts: Counter[str] = Counter()
     keys: list[str] = []
+    taken = state.taken_slugs()
 
     for file in sorted(f for f in ws_paths.input_dir.iterdir() if f.is_file()):
         key = local_key(file.name)
@@ -331,7 +337,8 @@ def prepare_local(root: Path, run_id: str | None = None, now_fn=config.utcnow) -
         keys.append(key)
         page = state.pages.get(key)
         if page is None:
-            page = Page(key=key, loc=file.name, slug=assign_slug(key, state.taken_slugs()), first_seen=now)
+            page = Page(key=key, loc=file.name, slug=assign_slug(key, taken), first_seen=now)
+            taken.add(page.slug)
             state.pages[key] = page
         new_hash = content_hash(md)
         page.last_fetched, page.last_error = now, None

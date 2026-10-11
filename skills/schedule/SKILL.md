@@ -13,7 +13,7 @@ One scheduled task, `kb-builder-sync`, runs `/kb-builder:sync all --unattended`,
 
 ## Turn scheduling off
 
-For `<site-id> off`: run `kb-builder site update <site-id> --unscheduled`. If no site is flagged `scheduled` any more (check `kb-builder site list`), offer to disable the `kb-builder-sync` task with `update_scheduled_task` (`enabled: false`). Stop here.
+For `<site-id> off`: run `kb-builder site update <site-id> --unscheduled`. If `kb-builder site list --json --scheduled` now returns an empty list, offer to disable the `kb-builder-sync` task with `update_scheduled_task` (`enabled: false`). Stop here.
 
 ## Turn scheduling on
 

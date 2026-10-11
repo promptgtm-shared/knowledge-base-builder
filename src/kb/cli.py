@@ -124,12 +124,24 @@ def site_add(
 
 
 @site_app.command("list")
-def site_list(ctx: typer.Context) -> None:
+def site_list(
+    ctx: typer.Context,
+    as_json: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+    scheduled: Annotated[bool, typer.Option("--scheduled", help="Only sites included in unattended runs.")] = False,
+    sitemap_only: Annotated[bool, typer.Option("--sitemap-only", help="Exclude the local ingest site.")] = False,
+) -> None:
     """List registered sites."""
-    ws = config.load_workspace(_root(ctx))
-    for site in ws.sites.values():
+    sites = [
+        s
+        for s in config.load_workspace(_root(ctx)).sites.values()
+        if (not scheduled or s.scheduled) and (not sitemap_only or not s.is_local)
+    ]
+    if as_json:
+        typer.echo(json.dumps([s.model_dump(mode="json") for s in sites], indent=2))
+        return
+    for site in sites:
         flags = [f for f, on in (("scheduled", site.scheduled), ("first-sync-done", site.first_sync_complete)) if on]
-        typer.echo(f"{site.id}\t{site.sitemap_url or '-'}\t{','.join(flags)}")
+        typer.echo(f"{site.id}	{site.sitemap_url or '-'}	{','.join(flags)}")
 
 
 @site_app.command("show")

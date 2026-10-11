@@ -80,7 +80,6 @@ class SiteState(BaseModel):
     pages: dict[str, Page] = Field(default_factory=dict)
     qmd_dirty: bool = False
     qmd_contexts: list[str] = Field(default_factory=list)
-    qmd_indexed_run: str | None = None
     held_archive: list[str] = Field(default_factory=list)
     progress: FetchProgress | None = None
     last_run: dict | None = None

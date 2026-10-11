@@ -91,7 +91,8 @@ def test_unchanged_site_second_run_fetches_lastmod_less_only_and_queues_nothing(
 def test_time_budget_returns_incomplete_and_resumes(root: Path, monkeypatch) -> None:
     pages = {f"p{i}": "2026-01-01" for i in range(15)}
     mock_site(pages)
-    ticks = iter([0.0, 0.0, 1000.0])
+    # deadline, checkpoint start and first loop check see t=0; time has run out after the first chunk
+    ticks = iter([0.0, 0.0, 0.0])
     monkeypatch.setattr(sync, "_clock", lambda: next(ticks, 1000.0))
     first = run_prepare(root, time_budget_s=100)
     assert first.status == "incomplete" and first.remaining_to_fetch == 5

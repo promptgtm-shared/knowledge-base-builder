@@ -14,7 +14,7 @@ from kb import config, indexes, locks
 from kb.fsutil import atomic_write_text
 from kb.report import write_run_report
 from kb.state import Page, PageStatus, SiteState, load_state, save_state
-from kb.sync import QUEUE_FILE, QueueItem, run_staging
+from kb.sync import QueueItem, load_queue, run_staging
 from kb.urls import is_local_key, normalize_url
 
 MIN_ARTICLE_CHARS = 200
@@ -216,8 +216,7 @@ def finalize(root: Path, site_id: str, run_id: str, now: datetime | None = None)
         raise FinalizeError(f"No completed prepare for run {run_id} on '{site_id}'. Run `kb sync prepare` first.")
 
     run_dir = run_staging(paths, run_id)
-    queue_file = run_dir / QUEUE_FILE
-    queue = [QueueItem.model_validate(q) for q in json.loads(queue_file.read_text(encoding="utf-8"))] if queue_file.exists() else []
+    queue = load_queue(run_dir)
     topics = _load_manifests(run_dir)
     today = now.date().isoformat()
     result = FinalizeResult(site=site_id, run_id=run_id, status="ok")

@@ -103,11 +103,17 @@ def apply_outcome(
     outcome: FetchOutcome,
     raw_dir: Path,
     now: datetime,
+    taken: set[str] | None = None,
 ) -> str:
-    """Update the page record for one fetch; returns a short label for run counters."""
+    """Update the page record for one fetch; returns a short label for run counters.
+
+    Pass a shared `taken` slug set when applying many outcomes to avoid rebuilding it per page.
+    """
     page = state.pages.get(entry.key)
     if page is None:
-        page = Page(key=entry.key, loc=entry.loc, slug=assign_slug(entry.key, state.taken_slugs()), first_seen=now)
+        taken = taken if taken is not None else state.taken_slugs()
+        page = Page(key=entry.key, loc=entry.loc, slug=assign_slug(entry.key, taken), first_seen=now)
+        taken.add(page.slug)
         state.pages[entry.key] = page
         page.status = PageStatus.FETCH_ERROR  # replaced below on success
 

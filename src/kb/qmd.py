@@ -155,7 +155,7 @@ def refresh(
 ) -> RefreshResult:
     """Refresh qmd for every dirty site, then release the run lock when nothing is left to do."""
     ws_paths = config.WorkspacePaths(root)
-    locks.verify(ws_paths.lock_file, run_id)
+    lock = locks.verify(ws_paths.lock_file, run_id)
     deadline = time.monotonic() + time_budget_s
     ws = config.load_workspace(root)
     states = {sid: load_state(ws_paths.site(sid).state_file) for sid in ws.sites}
@@ -182,12 +182,10 @@ def refresh(
             save_state(paths.state_file, state)
 
         # Global reindex once per run; a continuation of the same run skips it
-        if any(states[sid].qmd_indexed_run != run_id for sid in dirty):
+        if not lock.qmd_updated:
             qmd.update(timeout=max(deadline - time.monotonic(), 60))
+            locks.verify(ws_paths.lock_file, run_id, qmd_updated=True)
             result.updated = True
-            for sid in dirty:
-                states[sid].qmd_indexed_run = run_id
-                save_state(ws_paths.site(sid).state_file, states[sid])
 
         outcomes: dict[str, EmbedOutcome] = {}
         for sid in dirty:
