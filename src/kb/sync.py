@@ -14,10 +14,12 @@ from pydantic import BaseModel, Field
 
 from kb import config, http, locks
 from kb.diff import approval_matches, build_queue, classify
-from kb.fetch import apply_outcome, fetch_one
-from kb.fsutil import atomic_write_json
+from kb.convert import document_to_markdown
+from kb.fetch import apply_outcome, content_hash, fetch_one, raw_document
+from kb.fsutil import atomic_write_json, atomic_write_text
 from kb.sitemap import SitemapEntry, discover
-from kb.state import FetchProgress, PendingFetch, SiteState, load_state, save_state
+from kb.state import FetchProgress, Page, PageStatus, PendingFetch, SiteState, load_state, save_state
+from kb.urls import assign_slug, local_key
 
 COST_PER_PAGE_USD = 0.004
 DEFAULT_TIME_BUDGET_S = 480.0
@@ -289,3 +291,102 @@ def plan_batches(root: Path, site_id: str, run_id: str, size: int = 25) -> Batch
         total=len(items),
         batches=batches,
     )
+
+
+def prepare_local(root: Path, run_id: str | None = None, now_fn=config.utcnow) -> PrepareResult:
+    """Ingest input/ files into the reserved local site and queue new or changed ones."""
+    ws_paths = config.WorkspacePaths(root)
+    config.ensure_local_site(root)
+    if run_id is None:
+        run_id = locks.acquire(ws_paths.lock_file, label="ingest")
+    else:
+        locks.verify(ws_paths.lock_file, run_id)
+
+    paths = ws_paths.site(config.LOCAL_SITE_ID)
+    state = load_state(paths.state_file)
+    now = now_fn()
+    counts: Counter[str] = Counter()
+    keys: list[str] = []
+
+    for file in sorted(f for f in ws_paths.input_dir.iterdir() if f.is_file()):
+        key = local_key(file.name)
+        try:
+            md = document_to_markdown(file)
+        except Exception as e:  # noqa: BLE001 - one bad document must not stop ingest
+            counts["error"] += 1
+            if key in state.pages:
+                state.pages[key].last_error = f"convert failed: {e}"
+            continue
+        if md is None:
+            counts["unsupported"] += 1
+            continue
+        keys.append(key)
+        page = state.pages.get(key)
+        if page is None:
+            page = Page(key=key, loc=file.name, slug=assign_slug(key, state.taken_slugs()), first_seen=now)
+            state.pages[key] = page
+        new_hash = content_hash(md)
+        page.last_fetched, page.last_error = now, None
+        if new_hash == page.content_hash:
+            counts["unchanged"] += 1
+            continue
+        page.content_hash = new_hash
+        atomic_write_text(paths.raw / f"{page.slug}.md", raw_document(md, key, now))
+        if page.has_article and page.compiled_hash == new_hash:
+            page.status = PageStatus.COMPILED
+        else:
+            page.status, page.queued_at = PageStatus.PENDING, page.queued_at or now
+        counts["changed"] += 1
+
+    state.progress = FetchProgress(run_id=run_id, sitemap_keys=keys, fetch_done=True, fetch_counts=dict(counts))
+    queue_path, queued, deferred, churning = _write_queue(paths, state, run_id, None)
+    save_state(paths.state_file, state)
+    return PrepareResult(
+        status="ready",
+        site=config.LOCAL_SITE_ID,
+        run_id=run_id,
+        fetched=dict(counts),
+        queue_size=queued,
+        deferred=deferred,
+        churning=churning,
+        estimated_cost_usd=round(queued * COST_PER_PAGE_USD, 2),
+        queue_file=str(queue_path),
+    )
+
+
+class SiteStatus(BaseModel):
+    id: str
+    source: str
+    scheduled: bool
+    first_sync_complete: bool
+    last_sync_at: str | None
+    pages: dict[str, int]
+    queued: int
+    churning: int
+    archive_held: int
+    qmd_dirty: bool
+    last_run: dict | None
+
+
+def site_statuses(root: Path) -> list[SiteStatus]:
+    ws = config.load_workspace(root)
+    out = []
+    for site in ws.sites.values():
+        state = load_state(config.WorkspacePaths(root).site(site.id).state_file)
+        counts = Counter(p.status.value for p in state.pages.values())
+        out.append(
+            SiteStatus(
+                id=site.id,
+                source=site.sitemap_url or "local files (input/)",
+                scheduled=site.scheduled,
+                first_sync_complete=site.first_sync_complete,
+                last_sync_at=site.last_sync_at.isoformat(timespec="seconds") if site.last_sync_at else None,
+                pages=dict(counts),
+                queued=counts.get(PageStatus.PENDING.value, 0),
+                churning=sum(1 for p in state.pages.values() if p.churning and p.status == PageStatus.PENDING),
+                archive_held=len(state.held_archive),
+                qmd_dirty=state.qmd_dirty,
+                last_run=state.last_run,
+            )
+        )
+    return out

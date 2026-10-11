@@ -62,21 +62,50 @@ def workspace_show(ctx: typer.Context) -> None:
 
 
 @app.command()
-def status(ctx: typer.Context) -> None:
-    """Show tracked sites and their sync state."""
+def status(
+    ctx: typer.Context,
+    as_json: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """Show tracked sites, queue sizes, held archives and the last run."""
     root = _root(ctx)
-    ws = config.load_workspace(root)
-    if not ws.sites:
+    statuses = sync.site_statuses(root)
+    if as_json:
+        typer.echo(json.dumps([s.model_dump() for s in statuses], indent=2))
+        return
+    if not statuses:
         typer.echo(f"No sites registered in {root}.")
         return
-    for site in ws.sites.values():
-        typer.echo(f"{site.id}: {site.sitemap_url or 'local files'}")
+    lock = locks.read_lock(config.WorkspacePaths(root).lock_file)
+    if lock and not locks.is_stale(lock):
+        typer.echo(f"Sync in progress: run {lock.run_id} ({lock.label}).")
+    for s in statuses:
+        flags = ", ".join(f for f, on in (("scheduled", s.scheduled), ("qmd pending", s.qmd_dirty)) if on)
+        typer.echo("")
+        typer.echo(f"{s.id} - {s.source}" + (f" [{flags}]" if flags else ""))
+        typer.echo(f"  last sync: {s.last_sync_at or 'never'}")
+        typer.echo("  pages: " + (", ".join(f"{k} {v}" for k, v in sorted(s.pages.items())) or "none"))
+        if s.queued:
+            typer.echo(f"  queued for compile: {s.queued}" + (f" ({s.churning} churning)" if s.churning else ""))
+        if s.archive_held:
+            typer.echo(f"  HELD ARCHIVE: {s.archive_held} pages vanished at once; review, then sync {s.id} --approve-archive")
+        if s.last_run:
+            typer.echo(f"  last run: {s.last_run.get('status')} - {s.last_run.get('report')}")
 
 
 @app.command()
-def ingest(ctx: typer.Context) -> None:
-    """Convert files in input/ into the local site."""
-    _fail("ingest is not available yet.")
+def ingest(
+    ctx: typer.Context,
+    run_id: Annotated[str | None, typer.Option("--run-id", help="Join an existing run.")] = None,
+) -> None:
+    """Convert files in input/ into the local site and queue new or changed ones (JSON)."""
+    try:
+        result = sync.prepare_local(_root(ctx), run_id)
+    except locks.LockLost as e:
+        _fail(str(e))
+    except locks.LockHeld as e:
+        typer.echo(json.dumps({"status": "skipped", "message": str(e)}))
+        raise typer.Exit(code=3) from None
+    _emit(result)
 
 
 @site_app.command("add")
@@ -183,11 +212,15 @@ def sync_prepare(
     already_queued: Annotated[
         int, typer.Option("--already-queued", help="Pages already queued by earlier sites in this unattended run.")
     ] = 0,
+    budget: Annotated[
+        int | None, typer.Option("--budget", help="Compile at most this many pages now (others stay queued).")
+    ] = None,
     time_budget: Annotated[float, typer.Option("--time-budget", help="Seconds before returning 'incomplete'.")] = sync.DEFAULT_TIME_BUDGET_S,
 ) -> None:
     """Discover, diff and fetch a site; print JSON with status incomplete | ready | failed."""
     root = _root(ctx)
-    budget = sync.remaining_budget(root, already_queued) if unattended else None
+    if unattended:
+        budget = sync.remaining_budget(root, already_queued)
     try:
         result = sync.prepare(
             root,

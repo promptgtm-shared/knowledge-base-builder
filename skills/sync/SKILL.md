@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Sync tracked websites into the knowledge base — read each sitemap, fetch only new or changed pages, compile them into wiki articles, archive removed pages, and refresh the qmd search index. Use when the user asks to sync, update, refresh or check a tracked site for new posts/pages, or when a scheduled task runs `/kb-builder:sync all --unattended`.
-argument-hint: "<site-id|all> [--unattended] [--full] [--approve-archive]"
+argument-hint: "<site-id|all> [--unattended] [--full] [--approve-archive] [--budget N]"
 allowed-tools: Bash(kb-builder:*), Skill, Agent, Read, AskUserQuestion
 ---
 
@@ -13,6 +13,7 @@ Arguments: `$ARGUMENTS`
 - `--unattended`: a scheduled run. Never ask questions; apply the workspace compile cap; ignore `--approve-archive`.
 - `--full`: re-check every page's content even if its sitemap lastmod did not change.
 - `--approve-archive`: release a held mass-archive (interactive only).
+- `--budget N`: compile at most N pages now; the rest stay queued for later runs.
 
 Every `kb-builder` command prints JSON (except `site list` and `abort`). Read the fields named below; do not guess. If `kb-builder` itself is missing or fails with "No workspace configured", stop and tell the user to run `/kb-builder:add-site` first.
 
@@ -28,7 +29,7 @@ Run `kb-builder site list`. Each line is `id<TAB>sitemap<TAB>flags`. Ignore the 
 
 Keep `RUN_ID` (empty at first) and `QUEUED` (0 at first). For each site in order:
 
-1. Run `kb-builder sync prepare <site> [--run-id RUN_ID] [--full] [--approve-archive] [--unattended --already-queued QUEUED]`.
+1. Run `kb-builder sync prepare <site> [--run-id RUN_ID] [--full] [--approve-archive] [--budget N] [--unattended --already-queued QUEUED]`.
    - Exit code 3 with `"status": "skipped"`: another sync holds the workspace. Report it and stop the whole run; do not abort or release anything.
    - Save `run_id` from the first result as `RUN_ID` and pass `--run-id RUN_ID` on every later call.
    - `"status": "incomplete"`: run the same command again (with `--run-id`) until it is no longer incomplete.
