@@ -14,7 +14,7 @@ Present the result per site, leading with anything that needs attention:
 - **qmd pending**: the wiki changed but search indexing has not finished; the next sync retries it, or run `/kb-builder:sync <site-id>` now.
 - **queued for compile**: pages fetched but not yet compiled (usually the per-run cap). Mention churning pages if shown: their content changes on every visit, so they keep coming back.
 - **last run** `failed` or `partial`: offer to open the report file it names and summarize it.
-- A "Sync in progress" line: another run holds the workspace; it releases itself when done. A "Stale lock" line means a run crashed; the next sync reclaims it, or `kb-builder sync abort --run-id <run_id>` releases it now (only when the user confirms no sync is running).
+- A "Sync in progress" line: another run holds the workspace; it releases itself when done. A "Stale lock" line means a run crashed; the next sync reclaims it, or `kb-builder sync unlock` removes it now.
 
 ## Other changes the user may ask for
 

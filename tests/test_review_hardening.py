@@ -165,8 +165,8 @@ def test_missing_archive_copy_requeues_instead_of_sticking(tmp_path: Path) -> No
     env.page("back", status=PageStatus.ARCHIVED, topic="news", chash="c1", content="c1", in_sitemap=True)
     result = env.run()
     page = env.state.pages["https://example.com/back"]
-    assert result.requeued == 1 and page.status == PageStatus.PENDING
-    assert page.content_hash is None  # no raw file: next prepare refetches
+    assert result.requeued == 1 and page.status == PageStatus.FETCH_ERROR
+    assert page.content_hash is None and page.compiled_hash is None  # no raw file: next prepare refetches
 
 
 def test_compiled_page_with_deleted_article_is_healed(tmp_path: Path) -> None:

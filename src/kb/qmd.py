@@ -48,7 +48,7 @@ def subprocess_runner(binary: str | None = None) -> Runner:
     def run(args: list[str], timeout: float) -> tuple[int, str]:
         if not resolved:
             raise QmdError(f"`qmd` was not found on PATH. {INSTALL_HINT}")
-        unsafe = [a for a in args if SHELL_META_RE.search(a)]
+        unsafe = [a for a in args if SHELL_META_RE.search(a)] if os.name == "nt" else []
         if unsafe:
             raise QmdError(f"Refusing to pass {unsafe[0]!r} to qmd: it contains characters cmd.exe would interpret.")
         env = {**os.environ, "NO_COLOR": "1", "FORCE_COLOR": "0"}

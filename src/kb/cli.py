@@ -51,7 +51,10 @@ def _root(ctx: typer.Context) -> Path:
 @workspace_app.command("set")
 def workspace_set(path: Path) -> None:
     """Remember the workspace folder used when --root is not given."""
-    root = config.set_default_root(path)
+    try:
+        root = config.set_default_root(path)
+    except config.ConfigError as e:
+        _fail(str(e))
     typer.echo(f"Workspace set to {root}")
 
 
@@ -123,7 +126,7 @@ def ingest(
     """Convert files in input/ into the local site and queue new or changed ones (JSON)."""
     try:
         result = sync.prepare_local(_root(ctx), run_id)
-    except locks.LockLost as e:
+    except (config.ConfigError, locks.LockLost) as e:
         _fail(str(e))
     except locks.LockHeld as e:
         typer.echo(json.dumps({"status": "skipped", "message": str(e)}))
@@ -199,10 +202,7 @@ def site_update(
                 raise config.ConfigError("Taxonomy file must be a non-empty JSON object.")
             taxonomy.setdefault("general", "General")
             for folder in taxonomy:
-                try:
-                    config.check_name(str(folder), "Topic folder")
-                except ValueError as e:
-                    raise config.ConfigError(str(e)) from None
+                config.check_name(str(folder), "Topic folder")
             site.taxonomy = {str(k): str(v) for k, v in taxonomy.items()}
         if scheduled is not None:
             if scheduled and not site.first_sync_complete:
@@ -284,6 +284,20 @@ def sync_prepare(
     _emit(result)
 
 
+@sync_app.command("unlock")
+def sync_unlock(ctx: typer.Context) -> None:
+    """Remove the workspace lock only if it is stale or unreadable (a crashed run)."""
+    path = config.WorkspacePaths(_root(ctx)).lock_file
+    lock = locks.read_lock(path)
+    if lock is None:
+        typer.echo("No lock held.")
+        return
+    if not locks.is_stale(lock):
+        _fail(f"Lock of run {lock.run_id} is still active; use `sync abort --run-id {lock.run_id}` if that run is dead.")
+    path.unlink(missing_ok=True)
+    typer.echo(f"Removed stale lock of run {lock.run_id}.")
+
+
 @sync_app.command("abort")
 def sync_abort(
     ctx: typer.Context,
@@ -324,7 +338,7 @@ def qmd_refresh(
 
     try:
         result = refresh(_root(ctx), run_id, time_budget_s=time_budget)
-    except locks.LockLost as e:
+    except (config.ConfigError, locks.LockLost) as e:
         _fail(str(e))
     _emit(result)
 
@@ -339,6 +353,6 @@ def sync_batches(
     """Print this run's compile queue as batches (JSON) for the compile agents."""
     try:
         plan = sync.plan_batches(_root(ctx), site_id, run_id, size)
-    except config.ConfigError as e:
+    except (config.ConfigError, locks.LockLost) as e:
         _fail(str(e))
     _emit(plan)

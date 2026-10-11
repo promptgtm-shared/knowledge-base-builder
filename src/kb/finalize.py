@@ -147,6 +147,8 @@ def _should_be_in_wiki(page: Page, sitemap_keys: set[str]) -> bool:
     if page.status == PageStatus.ARCHIVED:
         # Reappeared with unchanged content: restore without recompiling
         return page.key in sitemap_keys and page.content_hash == page.compiled_hash
+    if page.alias_of:
+        return False  # a redirect duplicate's article belongs in archive/
     return page.status in (PageStatus.COMPILED, PageStatus.FETCH_ERROR)
 
 
@@ -163,9 +165,13 @@ def _heal(paths: config.SitePaths, state: SiteState, sitemap_keys: set[str], now
                 _move(archive_copy, wiki_copy)
                 restored += 1
             else:
-                page.status, page.queued_at = PageStatus.PENDING, now
-                if not (paths.raw / f"{page.slug}.md").exists():
-                    # Nothing to compile from: forget validators so the next prepare refetches it
+                # The article is gone: forget it was compiled so a same-content refetch cannot mark it done
+                page.compiled_hash = None
+                if (paths.raw / f"{page.slug}.md").exists():
+                    page.status, page.queued_at = PageStatus.PENDING, now
+                else:
+                    # Nothing to compile from: the next prepare retries the fetch, then queues it
+                    page.status = PageStatus.FETCH_ERROR
                     page.content_hash = page.lastmod = page.etag = page.last_modified = None
                 requeued += 1
                 continue

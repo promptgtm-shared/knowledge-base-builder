@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from kb.fsutil import atomic_write_json
 from kb.urls import normalize_url, site_id_from_url
@@ -40,8 +40,18 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 def check_name(value: str, what: str) -> str:
     """Site ids and topic folders become directory names and qmd arguments."""
     if not NAME_RE.match(value):
-        raise ValueError(f"{what} {value!r} must be lowercase letters, digits and hyphens (max 63, no leading hyphen)")
+        raise ConfigError(f"{what} {value!r} must be lowercase letters, digits and hyphens (max 63, no leading hyphen)")
     return value
+
+
+SHELL_META = set('&|<>^%"!')
+
+
+def check_workspace_path(path: Path) -> Path:
+    """On Windows qmd.exe re-parses arguments through cmd.exe, so the wiki paths it receives must be plain."""
+    if os.name == "nt" and SHELL_META & set(str(path)):
+        raise ConfigError(f"Workspace path {path} contains one of {''.join(sorted(SHELL_META))}; choose a plain folder path.")
+    return path
 
 
 def pointer_file() -> Path:
@@ -50,7 +60,7 @@ def pointer_file() -> Path:
 
 
 def set_default_root(path: Path) -> Path:
-    root = path.expanduser().resolve()
+    root = check_workspace_path(path.expanduser().resolve())
     root.mkdir(parents=True, exist_ok=True)
     pointer = pointer_file()
     pointer.parent.mkdir(parents=True, exist_ok=True)
@@ -83,18 +93,6 @@ class Site(BaseModel):
     first_sync_complete: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     last_sync_at: datetime | None = None
-
-    @field_validator("id")
-    @classmethod
-    def _valid_id(cls, value: str) -> str:
-        return check_name(value, "Site id")
-
-    @field_validator("taxonomy")
-    @classmethod
-    def _valid_taxonomy(cls, value: dict[str, str]) -> dict[str, str]:
-        for folder in value:
-            check_name(folder, "Topic folder")
-        return value
 
     @property
     def is_local(self) -> bool:
@@ -194,10 +192,8 @@ def add_site(root: Path, sitemap_url: str, site_id: str | None = None, descripti
         if existing.sitemap_url and normalize_url(existing.sitemap_url) == key:
             raise ConfigError(f"Sitemap already registered as '{existing.id}'.")
 
-    try:
-        site = Site(id=site_id, sitemap_url=sitemap_url, description=description)
-    except ValueError as e:
-        raise ConfigError(str(e).splitlines()[-1].strip()) from None
+    check_name(site_id, "Site id")
+    site = Site(id=site_id, sitemap_url=sitemap_url, description=description)
     ws.sites[site_id] = site
     WorkspacePaths(root).site(site_id).create()
     save_workspace(root, ws)

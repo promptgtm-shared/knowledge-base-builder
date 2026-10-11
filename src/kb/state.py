@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from kb.config import utcnow
 from kb.fsutil import atomic_write_json
@@ -83,6 +83,12 @@ class SiteState(BaseModel):
     held_archive: list[str] = Field(default_factory=list)
     progress: FetchProgress | None = None
     last_run: dict | None = None
+
+    @field_validator("qmd_contexts", mode="before")
+    @classmethod
+    def _contexts_from_list(cls, value: object) -> object:
+        # Earlier state files stored a list of targets; resend every context once
+        return {} if isinstance(value, list) else value
 
     def taken_slugs(self) -> set[str]:
         return {p.slug for p in self.pages.values()}

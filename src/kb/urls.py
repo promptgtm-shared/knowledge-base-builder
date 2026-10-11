@@ -39,7 +39,7 @@ def is_local_key(key: str) -> bool:
 def site_id_from_url(url: str) -> str:
     host = (urlsplit(url).hostname or "").lower()
     host = host.removeprefix("www.")
-    return re.sub(r"[^a-z0-9]+", "-", host).strip("-") or "site"
+    return re.sub(r"[^a-z0-9]+", "-", host).strip("-")[:63].strip("-") or "site"
 
 
 def short_hash(value: str, length: int = 8) -> str:
