@@ -6,8 +6,9 @@ __pycache__/
 dist/
 build/
 
-# uv
-uv.lock
+# Tooling
+.pytest_cache/
+.claude/worktrees/
 
 # Environment
 .env

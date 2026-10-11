@@ -1,0 +1,19 @@
+{
+  "name": "kb-builder",
+  "version": "0.3.0",
+  "description": "Track websites by sitemap and keep a compiled markdown wiki plus its qmd search index in sync — new, updated, and removed pages only.",
+  "author": {
+    "name": "promptgtm"
+  },
+  "homepage": "https://github.com/promptgtm-shared/knowledge-base-builder",
+  "repository": "https://github.com/promptgtm-shared/knowledge-base-builder",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-base",
+    "sitemap",
+    "scraper",
+    "wiki",
+    "qmd",
+    "search"
+  ]
+}

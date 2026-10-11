@@ -1,0 +1,254 @@
+"""qmd integration: one collection per site, refreshed once per run when a wiki changed.
+
+`qmd update` has no collection filter: it reindexes every collection and runs each
+collection's `update:` hook. It is therefore called at most once per run and only
+when at least one site's wiki changed. `qmd embed -c` is scoped per collection.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import Literal, Protocol
+
+from pydantic import BaseModel, Field
+
+from kb import config, locks, staging
+from kb.state import load_state, save_state
+
+COLLECTION_PREFIX = "kb-"
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+NOTHING_PENDING = ("All content hashes already have embeddings", "No non-empty documents to embed")
+EMBED_FAILURES = "still failed after retries"
+MAX_EMBED_PASSES = 3
+INSTALL_COMMANDS = ["npm install -g @tobilu/qmd", "bun install -g @tobilu/qmd"]
+INSTALL_HINT = f"Install it with `{INSTALL_COMMANDS[0]}` (or `{INSTALL_COMMANDS[1]}`); the next sync indexes everything."
+
+
+EmbedOutcome = Literal["done", "timeout", "failed"]
+
+
+class QmdError(Exception):
+    pass
+
+
+class Runner(Protocol):
+    def __call__(self, args: list[str], timeout: float) -> tuple[int, str]: ...
+
+
+def subprocess_runner(binary: str | None = None) -> Runner:
+    resolved = binary or shutil.which("qmd")
+    # Optional named qmd index (e.g. to keep kb collections out of the default index)
+    index = os.environ.get("KB_QMD_INDEX")
+    prefix = ["--index", index] if index else []
+
+    def run(args: list[str], timeout: float) -> tuple[int, str]:
+        if not resolved:
+            raise QmdError(f"`qmd` was not found on PATH. {INSTALL_HINT}")
+        unsafe = [a for a in args if SHELL_META_RE.search(a)] if os.name == "nt" else []
+        if unsafe:
+            raise QmdError(f"Refusing to pass {unsafe[0]!r} to qmd: it contains characters cmd.exe would interpret.")
+        env = {**os.environ, "NO_COLOR": "1", "FORCE_COLOR": "0"}
+        try:
+            proc = subprocess.run(
+                [resolved, *prefix, *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise QmdError(f"`qmd {' '.join(args)}` timed out after {int(timeout)}s") from e
+        return proc.returncode, ANSI_RE.sub("", (proc.stdout or "") + (proc.stderr or ""))
+
+    return run
+
+
+SHELL_META_RE = re.compile(r'[&|<>^%"!]')
+
+
+def safe_text(text: str) -> str:
+    """qmd.exe on Windows re-parses arguments through cmd.exe, so shell metacharacters split the command."""
+    return SHELL_META_RE.sub("", text.replace("&", "and")).strip()
+
+
+def collection_name(site_id: str) -> str:
+    return f"{COLLECTION_PREFIX}{site_id}"
+
+
+def site_contexts(site: config.Site) -> dict[str, str]:
+    name = collection_name(site.id)
+    root_text = site.description or (
+        f"Knowledge base compiled from {site.sitemap_url}." if site.sitemap_url else "Knowledge base compiled from local files."
+    )
+    contexts = {f"qmd://{name}/": f"{root_text.rstrip('.')}. Start at _master-index.md."}
+    for topic, label in site.taxonomy.items():
+        contexts[f"qmd://{name}/{topic}"] = f"{label} articles."
+    return contexts
+
+
+class Qmd:
+    def __init__(self, runner: Runner | None = None) -> None:
+        self.binary = None if runner else shutil.which("qmd")
+        self.available = runner is not None or self.binary is not None
+        self.run = runner or subprocess_runner(self.binary)
+
+    def version(self) -> str | None:
+        if not self.available:
+            return None
+        code, out = self.run(["--version"], 30)
+        return out.strip().splitlines()[0] if code == 0 and out.strip() else None
+
+    def _check(self, args: list[str], timeout: float = 300) -> str:
+        code, out = self.run(args, timeout)
+        if code != 0:
+            tail = "\n".join(out.strip().splitlines()[-5:])
+            raise QmdError(f"`qmd {' '.join(args)}` failed (exit {code}): {tail}")
+        return out
+
+    def collection_exists(self, name: str) -> bool:
+        code, _ = self.run(["collection", "show", name], 60)
+        return code == 0
+
+    def ensure_collection(self, name: str, wiki: Path) -> bool:
+        """Create the collection if missing (qmd indexes it on creation). Returns True if created."""
+        if self.collection_exists(name):
+            return False
+        wiki.mkdir(parents=True, exist_ok=True)
+        self._check(["collection", "add", str(wiki), "--name", name], timeout=1800)
+        return True
+
+    def add_context(self, target: str, text: str) -> None:
+        self._check(["context", "add", target, safe_text(text)], timeout=60)
+
+    def update(self, timeout: float) -> None:
+        self._check(["update"], timeout=timeout)
+
+    def embed(self, name: str, deadline: float) -> EmbedOutcome:
+        """Embed until qmd reports nothing pending for the collection."""
+        for _ in range(MAX_EMBED_PASSES):
+            remaining = deadline - time.monotonic()
+            # Leave at least a minute between qmd's own --timeout and our subprocess kill
+            minutes = int(remaining // 60) - 1
+            if minutes < 1:
+                return "timeout"
+            out = self._check(["embed", "-c", name, "--timeout", str(minutes)], timeout=remaining)
+            if any(marker in out for marker in NOTHING_PENDING):
+                return "done"
+            if EMBED_FAILURES in out:
+                return "failed"
+        return "timeout"
+
+    def remove_collection(self, name: str) -> bool:
+        if not self.collection_exists(name):
+            return False
+        self._check(["collection", "remove", name], timeout=600)
+        return True
+
+
+class RefreshResult(BaseModel):
+    status: Literal["done", "incomplete", "failed", "skipped"]
+    run_id: str
+    updated: bool = False
+    embedded: list[str] = Field(default_factory=list)
+    still_dirty: list[str] = Field(default_factory=list)
+    created_collections: list[str] = Field(default_factory=list)
+    qmd_missing: bool = False
+    message: str = ""
+
+
+class QmdCheck(BaseModel):
+    installed: bool
+    path: str | None = None
+    version: str | None = None
+    install_commands: list[str] = Field(default_factory=lambda: list(INSTALL_COMMANDS))
+    models_command: str = "qmd pull"
+
+
+def check(qmd: Qmd | None = None) -> QmdCheck:
+    qmd = qmd or Qmd()
+    return QmdCheck(installed=qmd.available, path=qmd.binary, version=qmd.version())
+
+
+def refresh(
+    root: Path,
+    run_id: str,
+    qmd: Qmd | None = None,
+    time_budget_s: float = 480.0,
+) -> RefreshResult:
+    """Refresh qmd for every dirty site, then release the run lock when nothing is left to do."""
+    ws_paths = config.WorkspacePaths(root)
+    staging.validate_run_id(run_id)
+    lock = locks.verify(ws_paths.lock_file, run_id)
+    deadline = time.monotonic() + time_budget_s
+    ws = config.load_workspace(root)
+    states = {sid: load_state(ws_paths.site(sid).state_file) for sid in ws.sites}
+    dirty = [sid for sid, st in states.items() if st.qmd_dirty]
+    result = RefreshResult(status="done", run_id=run_id)
+
+    if not dirty:
+        locks.release(ws_paths.lock_file, run_id)
+        result.status = "skipped"
+        result.message = "No wiki changes; qmd untouched."
+        return result
+
+    qmd = qmd or Qmd()
+    if not qmd.available:
+        # Search is optional: wikis are saved and stay marked, so the first sync after install indexes them
+        locks.release(ws_paths.lock_file, run_id)
+        result.status = "skipped"
+        result.qmd_missing = True
+        result.still_dirty = dirty
+        result.message = f"qmd is not installed, so search indexing is pending for: {', '.join(dirty)}. {INSTALL_HINT}"
+        return result
+
+    try:
+        for sid in dirty:
+            site, state, paths = ws.sites[sid], states[sid], ws_paths.site(sid)
+            name = collection_name(sid)
+            if qmd.ensure_collection(name, paths.wiki):
+                result.created_collections.append(name)
+                state.qmd_contexts = {}
+            for target, text in site_contexts(site).items():
+                if state.qmd_contexts.get(target) != text:
+                    qmd.add_context(target, text)  # qmd replaces an existing context for the same target
+                    state.qmd_contexts[target] = text
+            save_state(paths.state_file, state)
+
+        # Global reindex once per run; a continuation of the same run skips it
+        if not lock.qmd_updated:
+            qmd.update(timeout=max(deadline - time.monotonic(), 60))
+            locks.verify(ws_paths.lock_file, run_id, qmd_updated=True)
+            result.updated = True
+
+        outcomes: dict[str, EmbedOutcome] = {}
+        for sid in dirty:
+            outcomes[sid] = qmd.embed(collection_name(sid), deadline)
+            if outcomes[sid] == "done":
+                states[sid].qmd_dirty = False
+                save_state(ws_paths.site(sid).state_file, states[sid])
+                result.embedded.append(sid)
+            else:
+                result.still_dirty.append(sid)
+    except Exception as e:  # noqa: BLE001 - this step owns the lock release, whatever failed
+        result.status = "failed"
+        result.message = f"{e} Wiki changes are saved; qmd will be retried on the next run."
+        result.still_dirty = [sid for sid in dirty if states[sid].qmd_dirty]
+        locks.release(ws_paths.lock_file, run_id)
+        return result
+
+    if "timeout" in outcomes.values():
+        result.status = "incomplete"
+        result.message = "Embedding not finished within the time budget; call `kb qmd refresh --run-id` again."
+        return result
+    if result.still_dirty:
+        result.status = "failed"
+        result.message = "Some chunks failed to embed; those sites stay marked for retry on the next run."
+    locks.release(ws_paths.lock_file, run_id)
+    return result
