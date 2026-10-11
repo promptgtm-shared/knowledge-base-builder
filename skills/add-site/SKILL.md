@@ -2,7 +2,7 @@
 name: add-site
 description: Start tracking a website in the knowledge base — choose the workspace folder on first use, register the site's sitemap, review its topic taxonomy, run the first sync, and offer to schedule recurring syncs. Use when the user wants to add, track, watch or build a knowledge base from a website or sitemap URL.
 argument-hint: "<sitemap-url> [--id <site-id>]"
-allowed-tools: Bash(kb-builder:*), Skill, Read, Write, AskUserQuestion
+allowed-tools: Bash(kb-builder:*), Skill, Write, AskUserQuestion
 ---
 
 # Add a site
@@ -21,11 +21,11 @@ Ask for a one-line description of the site (optional; it becomes the qmd search 
 kb-builder site add "<sitemap-url>" [--id <site-id>] --description "<description>"
 ```
 
-If it reports the site or sitemap already exists, stop and offer `/kb-builder:sync <site-id>` instead.
+It prints JSON with the site `id` (derived from the domain unless `--id` was given; ids are lowercase letters, digits and hyphens) and its `wiki` folder: use that `id` from here on. If it reports the site or sitemap already exists, stop and offer `/kb-builder:sync <site-id>` instead.
 
 ## 3. Taxonomy
 
-Run `kb-builder site show <site-id>` and show the user the `taxonomy` (topic folder → label). Articles are filed into these folders. Ask whether to keep it or adjust it. To change it, write the full JSON object (folder → label, lowercase-hyphenated folder names) to a temporary file and run `kb-builder site update <site-id> --taxonomy-file "<file>"`. `general` is always kept as the fallback.
+Run `kb-builder site show <site-id>` and show the user the `taxonomy` (topic folder → label). Articles are filed into these folders. Ask whether to keep it or adjust it. To change it, write the full JSON object (folder → label; folder names lowercase letters, digits and hyphens) to a file in the workspace folder and run `kb-builder site update <site-id> --taxonomy-file "<file>"`. `general` is always kept as the fallback. Changing the taxonomy later only affects articles compiled from then on.
 
 ## 4. First sync
 

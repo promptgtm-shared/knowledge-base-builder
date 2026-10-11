@@ -29,7 +29,8 @@ For `<site-id> off`: run `kb-builder site update <site-id> --unscheduled`. If `k
 5. Tell the user, in this order:
    - Runs happen while the Claude desktop app is open and the computer is awake; a missed run catches up when the app opens again.
    - Click **Run now** on the task once (Scheduled section in the sidebar) and approve the tools it asks for. Approvals are saved on the task, so later runs do not stop on permission prompts.
-   - Each run compiles at most the workspace cap (default 50 pages, set `unattended_cap` in `sites.json`); leftovers continue on the next run.
+   - Each run compiles at most the workspace cap in total (default 50 pages; change it with `kb-builder workspace cap <N>`); leftovers continue on the next run.
+   - When approving tools for the task, approve `kb-builder` commands, Skill and Agent, and approve file writes only inside the workspace folder. The compile agents only need to write into `<workspace>/sites/*/staging/`.
    - Problems show at the top of each run's final message (lines starting with `PROBLEM:`) and in `/kb-builder:status`.
 
 ## Without the desktop app
@@ -37,7 +38,9 @@ For `<site-id> off`: run `kb-builder site update <site-id> --unscheduled`. If `k
 If the user wants syncs without the desktop app open, explain the headless alternative and let them set it up themselves. It needs a valid `claude` CLI login (`claude auth login`). Create a Windows Task Scheduler task or cron entry, with the workspace folder as the working directory, that runs:
 
 ```bash
-claude -p "/kb-builder:sync all --unattended" --add-dir "<workspace>" --permission-mode dontAsk --allowedTools "Bash(kb-builder:*)" "Skill" "Agent" "Read" "Write" "AskUserQuestion"
+claude -p "/kb-builder:sync all --unattended" --add-dir "<workspace>" --permission-mode dontAsk --allowedTools "Bash(kb-builder:*)" "Skill" "Agent" "Read(//<workspace>/**)" "Edit(//<workspace>/sites/**)"
 ```
+
+`//` marks an absolute path in permission rules; Edit rules also cover writes. Keep file access scoped to the workspace: the compile agents read untrusted web content.
 
 Use the absolute path to `claude`. Do not use `--bare`: it skips installed plugins.
