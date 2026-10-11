@@ -1,0 +1,16 @@
+{
+  "name": "kb-builder",
+  "owner": {
+    "name": "promptgtm"
+  },
+  "metadata": {
+    "description": "Sitemap-driven knowledge base builder plugin."
+  },
+  "plugins": [
+    {
+      "name": "kb-builder",
+      "source": "./",
+      "description": "Sitemap-driven knowledge base builder with incremental sync and qmd indexing."
+    }
+  ]
+}
