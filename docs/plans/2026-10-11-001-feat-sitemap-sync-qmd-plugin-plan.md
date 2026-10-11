@@ -1,7 +1,7 @@
 ---
 title: "feat: Sitemap-watching knowledge base plugin with incremental sync and qmd indexing"
 type: feat
-status: active
+status: completed
 date: 2026-10-11
 ---
 
