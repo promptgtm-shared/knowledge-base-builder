@@ -8,8 +8,9 @@ Claude Code plugin (`kb-builder`) that tracks websites by sitemap, incrementally
 .claude-plugin/   # plugin.json + marketplace.json (repo is its own marketplace)
 bin/kb-builder    # wrapper skills call; runs the kb CLI from the locked uv env
 skills/           # add-site, sync, compile-wiki (internal), schedule, status, ingest
-src/kb/           # kb CLI: config, urls, http, sitemap, fetch, state, diff, locks,
-                  #   sync (prepare/abort/batches/ingest), finalize, indexes, qmd, report
+agents/           # wiki-compiler: Haiku sub-agent with Read/Write only (reads untrusted pages)
+src/kb/           # kb CLI: config, urls, http, sitemap, fetch, state, diff, locks, staging,
+                  #   sync (prepare/abort/batches/ingest/status), finalize, indexes, qmd, report
 tests/            # pytest; httpx mocked with respx, qmd with a fake runner
 docs/plans/       # implementation plans
 ```
@@ -27,6 +28,8 @@ User data never lives in the repo or plugin root: it is in the workspace folder 
 
 - Deterministic work belongs in the `kb` CLI; skills only orchestrate and run the compile agents.
 - `finalize` is the only writer of `wiki/` and `archive/`; compile agents write to `staging/<run-id>/` only.
+- Run ids, site ids and topic folders become paths and qmd arguments: keep them validated (`staging.validate_run_id`, `config.check_name`).
+- CLI steps must return within their time budget (default 90s for prepare) and resume via `--run-id`.
 - Never call `qmd update` more than once per run or when nothing changed (it reindexes every collection and runs their hooks).
 - CLI output consumed by skills is JSON; keep field names stable.
 - No hardcoded absolute paths; secrets via environment variables only.

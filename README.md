@@ -70,10 +70,11 @@ Each article starts with its title followed by `**Source:**` (page URL), `**Crea
 
 - **Removed pages are archived, not deleted.** If a page comes back with the same content it is restored without a recompile.
 - **Mass-archive guard.** When a site has 10+ known pages and more than 20% vanish from the sitemap in one run, nothing is archived and the run report and `status` say so. Check the site, then run `/kb-builder:sync <site-id> --approve-archive`.
-- **Compile cap.** Unattended runs compile at most `unattended_cap` pages in total (default 50, in `sites.json`). The rest stay queued, oldest first, and are picked up by the next run. Pages whose content changes on every visit are flagged as churning and go last.
+- **Compile cap.** Unattended runs compile at most `unattended_cap` pages in total across all sites (default 50; `kb-builder workspace cap <N>` changes it). The rest stay queued, oldest first, and are picked up by the next run. Pages whose content changes on every visit are flagged as churning and go last.
 - **Sites without `<lastmod>`.** Every page is re-fetched each run (cheap) and only compiled when its content hash changes. `--full` forces this for sites whose lastmod you don't trust.
 - **One sync at a time.** A workspace lock is shared by every step of a run; a run that finds it held reports `skipped`. A crashed run's lock expires after 6 hours.
 - **qmd refresh is global.** qmd cannot reindex a single collection, so `qmd update` reindexes all your collections and runs their `update:` hooks. It runs once per sync and only when a wiki changed. Set `KB_QMD_INDEX=<name>` to keep kb collections in a separate named qmd index instead (the default `qmd search` and qmd MCP server then won't see them).
+- **Untrusted content stays contained.** Compile agents are a dedicated `wiki-compiler` sub-agent with only Read and Write, told to treat page text as data, and their output only lands in the wiki through `finalize`. Non-HTML responses (PDFs, images) and pages over 5 MB are skipped.
 - **Your own files are safe.** Notes you add under a site's wiki are listed as untracked in run reports, never deleted. Manual edits to compiled articles are overwritten when that page is recompiled.
 
 ## Scheduling
@@ -83,8 +84,10 @@ Each article starts with its title followed by `**Source:**` (page URL), `**Crea
 Headless alternative (no desktop app; requires a valid `claude auth login`):
 
 ```bash
-claude -p "/kb-builder:sync all --unattended" --add-dir "<workspace>" --permission-mode dontAsk --allowedTools "Bash(kb-builder:*)" "Skill" "Agent" "Read" "Write" "AskUserQuestion"
+claude -p "/kb-builder:sync all --unattended" --add-dir "<workspace>" --permission-mode dontAsk --allowedTools "Bash(kb-builder:*)" "Skill" "Agent" "Read(//<workspace>/**)" "Edit(//<workspace>/sites/**)"
 ```
+
+Keep file permissions scoped to the workspace like this: compile agents read untrusted web pages.
 
 Run it from Windows Task Scheduler or cron with the workspace as working directory and an absolute path to `claude`. Don't use `--bare`; it skips installed plugins.
 
@@ -93,6 +96,8 @@ Run it from Windows Task Scheduler or cron with the workspace as working directo
 | Symptom | Fix |
 |---------|-----|
 | `No workspace configured` | Run `/kb-builder:add-site` (it asks for the folder) |
+| `Refusing to pass ... to qmd` | The workspace path contains `& \| < > ^ % " !`; move the workspace to a plain path (qmd.exe re-parses arguments through cmd.exe on Windows) |
+| `Stale lock` in status | A run crashed; the next sync reclaims it after 6 hours, or `kb-builder sync abort --run-id <id>` releases it now |
 | `qmd was not found on PATH` | Install qmd; the wiki is still updated and indexing is retried next sync |
 | `skipped: Workspace is locked` | Another sync is running; wait, or it expires 6 hours after its last activity |
 | `HELD ARCHIVE` in status | Review the listed URLs, then sync with `--approve-archive` |
@@ -106,7 +111,7 @@ uv run pytest
 uv run kb --help
 ```
 
-The CLI (`src/kb/`) holds all deterministic logic: sitemap discovery, diffing, fetching, state, locking, finalize, indexes and qmd calls. Skills in `skills/` orchestrate it and run the LLM compile step. `bin/kb-builder` is the wrapper skills call; the plugin's `bin/` is on PATH inside Claude Code.
+The CLI (`src/kb/`) holds all deterministic logic: sitemap discovery, diffing, fetching, state, locking, finalize, indexes and qmd calls. Skills in `skills/` orchestrate it, and `agents/wiki-compiler.md` is the restricted sub-agent that writes articles. Every CLI step returns within a time budget and reports `incomplete` so it fits Claude Code's Bash timeout; skills call it again with `--run-id` to continue. `bin/kb-builder` is the wrapper skills call; the plugin's `bin/` is on PATH inside Claude Code.
 
 ## License
 
