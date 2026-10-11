@@ -48,7 +48,7 @@ Keep `RUN_ID` (empty at first) and `QUEUED` (0 at first). For each site in order
 
 ## 3. Refresh search and release the lock
 
-If `RUN_ID` is set, run `kb-builder qmd refresh --run-id RUN_ID`, repeating while `"status": "incomplete"` (within the limit). This always runs last because it releases the workspace lock. `"status": "failed"` is not fatal: the wiki is saved and qmd is retried on the next sync; include the `message` in the summary.
+If `RUN_ID` is set, run `kb-builder qmd refresh --run-id RUN_ID`, repeating while `"status": "incomplete"` (within the limit). This always runs last because it releases the workspace lock. `"status": "failed"` is not fatal: the wiki is saved and qmd is retried on the next sync; include the `message` in the summary. `"qmd_missing": true` means qmd is not installed: the wiki is fine and indexing waits for an install. Report it as a `NOTE:` line with the install command, not as a `PROBLEM:`.
 
 ## On any unexpected error
 

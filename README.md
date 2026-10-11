@@ -21,7 +21,9 @@ qmd search ◄── qmd update + embed ◄── wiki + indexes ◄── Haiku
 
 ## Install
 
-Prerequisites: Claude Code (desktop app for scheduled syncs), [uv](https://docs.astral.sh/uv/), Python 3.12+, and qmd (`npm install -g @tobilu/qmd`).
+Prerequisites: Claude Code (desktop app for scheduled syncs), [uv](https://docs.astral.sh/uv/) and Python 3.12+. For search, also [qmd](https://github.com/tobi/qmd): `npm install -g @tobilu/qmd` (or `bun install -g @tobilu/qmd`), then `qmd pull` for its local models. `/kb-builder:add-site` checks for qmd and offers to install it.
+
+qmd is optional. Without it the plugin still builds and updates the markdown wiki; each site stays marked for indexing, and the first sync after qmd is installed indexes everything. The kb collections live in qmd's default index, so an existing qmd MCP server sees them without extra setup.
 
 In Claude Code:
 
@@ -98,7 +100,7 @@ Run it from Windows Task Scheduler or cron with the workspace as working directo
 | `No workspace configured` | Run `/kb-builder:add-site` (it asks for the folder) |
 | `Refusing to pass ... to qmd` | The workspace path contains `& \| < > ^ % " !`; move the workspace to a plain path (qmd.exe re-parses arguments through cmd.exe on Windows) |
 | `Stale lock` in status | A run crashed; the next sync reclaims it after 6 hours, or `kb-builder sync abort --run-id <id>` releases it now |
-| `qmd was not found on PATH` | Install qmd; the wiki is still updated and indexing is retried next sync |
+| `qmd is not installed` / `Search: ... pending` | Install qmd (`kb-builder qmd check` prints the commands); the next sync indexes the backlog |
 | `skipped: Workspace is locked` | Another sync is running; wait, or it expires 6 hours after its last activity |
 | `HELD ARCHIVE` in status | Review the listed URLs, then sync with `--approve-archive` |
 | Sitemap read failed | Nothing changed; check the sitemap URL shown by `kb-builder site show <id>` |

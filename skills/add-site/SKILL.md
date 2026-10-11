@@ -13,6 +13,17 @@ Arguments: `$ARGUMENTS` — a sitemap URL (for example `https://example.com/site
 
 Run `kb-builder workspace show`. If it fails with "No workspace configured", ask the user where the knowledge base should live (suggest `~/kb`), then run `kb-builder workspace set "<folder>"`. Every tracked site, its wiki and its sync state go in that folder.
 
+## 1b. Search engine (qmd)
+
+Run `kb-builder qmd check`. If `installed` is true, continue.
+
+If not, explain: the wiki works without qmd (plain markdown files), but keyword and meaning search over it needs qmd. Ask whether to install it now:
+
+- **Install now:** run the first of `install_commands` (npm), or the second (bun) if npm is not available; this asks the user for permission. Then run `qmd pull` to download the local search models (several hundred MB). Run `kb-builder qmd check` again to confirm.
+- **Later:** continue. Syncs still build the wiki and keep it marked for indexing; the first sync after qmd is installed indexes everything.
+
+Never install qmd without the user saying yes.
+
 ## 2. Register
 
 Ask for a one-line description of the site (optional; it becomes the qmd search context). Then run:
@@ -40,4 +51,4 @@ The sync skill shows the page count and estimated cost before compiling.
 
 When the first sync finished preparing (the site now has `first-sync-done` in `kb-builder site list`), ask whether to sync this site on a schedule. If yes, invoke the Skill tool with skill `kb-builder:schedule` and args `<site-id>`.
 
-Finish with where the wiki lives (`<workspace>/sites/<site-id>/wiki/`) and the qmd collection name `kb-<site-id>`, for example `qmd search "<terms>" -c kb-<site-id>`.
+Finish with where the wiki lives (`<workspace>/sites/<site-id>/wiki/`) and, if qmd is installed, the qmd collection name `kb-<site-id>`, for example `qmd search "<terms>" -c kb-<site-id>`. If qmd was skipped, remind the user that search starts working after they install it and run a sync.

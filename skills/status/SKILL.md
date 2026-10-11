@@ -11,7 +11,7 @@ Run `kb-builder status` (or `kb-builder status --json` when you need exact value
 Present the result per site, leading with anything that needs attention:
 
 - **HELD ARCHIVE**: many pages vanished from the sitemap at once, so nothing was archived. Suggest checking the site, then `/kb-builder:sync <site-id> --approve-archive`.
-- **qmd pending**: the wiki changed but search indexing has not finished; the next sync retries it, or run `/kb-builder:sync <site-id>` now.
+- **qmd pending**: the wiki changed but search indexing has not finished; the next sync retries it, or run `/kb-builder:sync <site-id>` now. If status also says qmd is not installed, run `kb-builder qmd check` for the install commands: indexing catches up on the first sync after installing.
 - **queued for compile**: pages fetched but not yet compiled (usually the per-run cap). Mention churning pages if shown: their content changes on every visit, so they keep coming back.
 - **last run** `failed` or `partial`: offer to open the report file it names and summarize it.
 - A "Sync in progress" line: another run holds the workspace; it releases itself when done. A "Stale lock" line means a run crashed; the next sync reclaims it, or `kb-builder sync unlock` removes it now.
