@@ -120,9 +120,10 @@ class Qmd:
         """Embed until qmd reports nothing pending for the collection."""
         for _ in range(MAX_EMBED_PASSES):
             remaining = deadline - time.monotonic()
-            if remaining < 30:
+            # Leave at least a minute between qmd's own --timeout and our subprocess kill
+            minutes = int(remaining // 60) - 1
+            if minutes < 1:
                 return "timeout"
-            minutes = max(int(remaining // 60) - 1, 1)
             out = self._check(["embed", "-c", name, "--timeout", str(minutes)], timeout=remaining)
             if any(marker in out for marker in NOTHING_PENDING):
                 return "done"

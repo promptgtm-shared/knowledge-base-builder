@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -39,7 +40,7 @@ def _host(url: str) -> str:
 @dataclass
 class FetchOutcome:
     key: str
-    kind: str  # "content" | "not_modified" | "alias" | "error"
+    kind: Literal["content", "not_modified", "alias", "error"]
     markdown: str | None = None
     final_url: str | None = None
     etag: str | None = None
@@ -155,11 +156,11 @@ def apply_outcome(
         page.change_streak = 0
         label = "not_modified"
 
-    _settle_status(page, now)
+    settle_status(page, now)
     return label
 
 
-def _settle_status(page: Page, now: datetime) -> None:
+def settle_status(page: Page, now: datetime) -> None:
     """After a successful fetch: compiled if the article matches the content, else queue it."""
     if page.status == PageStatus.ARCHIVED:
         if page.content_hash != page.compiled_hash:

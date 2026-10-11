@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 import ssl
 from collections.abc import Awaitable, Callable
@@ -84,12 +85,19 @@ def create_client(policy: HttpPolicy) -> httpx.AsyncClient:
     )
 
 
+MAX_RETRY_AFTER_S = 60.0
+
+
 def _retry_after(resp: httpx.Response, attempt: int) -> float:
-    value = resp.headers.get("Retry-After", "")
+    """Server-requested delay, clamped so a hostile or broken host cannot stall the run."""
+    backoff = float(2 ** (attempt + 1))
     try:
-        return float(value)
+        value = float(resp.headers.get("Retry-After", ""))
     except ValueError:
-        return float(2 ** (attempt + 1))
+        return backoff
+    if not math.isfinite(value) or value < 0:
+        return backoff
+    return min(value, MAX_RETRY_AFTER_S)
 
 
 async def get(

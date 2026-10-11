@@ -171,3 +171,29 @@ def test_contexts_sent_sanitized(tmp_path: Path) -> None:
     refresh(tmp_path, run_id, Qmd(fake))
     sent = [c[3] for c in fake.calls if c[0] == "context"]
     assert "Product and Features articles." in sent and not any("&" in s for s in sent)
+
+
+def test_new_topic_adds_only_its_context(tmp_path: Path) -> None:
+    run_id = setup(tmp_path, {"alpha": True})
+    refresh(tmp_path, run_id, Qmd(FakeQmd()))
+    ws = config.load_workspace(tmp_path)
+    ws.sites["alpha"].taxonomy["pricing"] = "Pricing"
+    config.save_workspace(tmp_path, ws)
+    paths = config.WorkspacePaths(tmp_path).site("alpha")
+    state = load_state(paths.state_file)
+    state.qmd_dirty = True
+    save_state(paths.state_file, state)
+
+    fake = FakeQmd(existing={"kb-alpha"})
+    refresh(tmp_path, locks.acquire(config.WorkspacePaths(tmp_path).lock_file), Qmd(fake))
+    assert [c[2] for c in fake.calls if c[0] == "context"] == ["qmd://kb-alpha/pricing"]
+
+
+def test_embed_needs_a_minute_of_grace(tmp_path: Path) -> None:
+    import time
+
+    fake = FakeQmd()
+    assert Qmd(fake).embed("kb-x", time.monotonic() + 100) == "timeout"
+    assert fake.calls == []
+    assert Qmd(fake).embed("kb-x", time.monotonic() + 200) == "done"
+    assert fake.calls[0][-1] == "2"

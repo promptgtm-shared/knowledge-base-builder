@@ -78,3 +78,16 @@ def test_extra_headers_sent_and_final_url_recorded() -> None:
     assert resp.url == "https://example.com/new"
     assert resp.headers["etag"] == '"abc"'
     assert respx.calls[0].request.headers["If-None-Match"] == '"old"'
+
+
+@respx.mock
+def test_retry_after_is_clamped_and_sanitized() -> None:
+    slept: list[float] = []
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+
+    for header in ("1e9", "inf", "-5", "nan"):
+        respx.get(URL).mock(side_effect=[httpx.Response(429, headers={"Retry-After": header}), httpx.Response(200)])
+        _run(_get(sleep=record))
+    assert slept == [60.0, 2.0, 2.0, 2.0]

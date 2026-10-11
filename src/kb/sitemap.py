@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -67,7 +68,7 @@ def parse_document(data: bytes, url: str) -> tuple[str, list[tuple[str, str | No
     if data[:2] == b"\x1f\x8b":
         try:
             data = gzip.decompress(data)
-        except OSError as e:
+        except (OSError, EOFError, zlib.error) as e:
             raise _Failure(url, f"invalid gzip: {e}") from None
     try:
         root = ET.fromstring(data)

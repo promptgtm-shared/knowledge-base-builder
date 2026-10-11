@@ -73,13 +73,15 @@ def acquire(path: Path, label: str = "", now: datetime | None = None) -> str:
     return lock.run_id
 
 
-def verify(path: Path, run_id: str, now: datetime | None = None, **updates: object) -> Lock:
-    """Confirm `run_id` owns the lock, refresh its heartbeat, and apply run-scoped flag updates."""
+def verify(path: Path, run_id: str, now: datetime | None = None, qmd_updated: bool | None = None) -> Lock:
+    """Confirm `run_id` owns the lock, refresh its heartbeat, and optionally set run-scoped flags."""
     lock = read_lock(path)
     if lock is None or lock.run_id != run_id:
         holder = f"run {lock.run_id}" if lock else "nobody"
         raise LockLost(f"Run {run_id} does not hold the workspace lock (held by {holder}).")
-    lock = lock.model_copy(update={**updates, "heartbeat_at": now or utcnow()})
+    lock.heartbeat_at = now or utcnow()
+    if qmd_updated is not None:
+        lock.qmd_updated = qmd_updated
     atomic_write_text(path, lock.model_dump_json())
     return lock
 

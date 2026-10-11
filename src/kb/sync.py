@@ -8,14 +8,14 @@ import shutil
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
 from kb import config, http, locks
 from kb.convert import document_to_markdown
 from kb.diff import approval_matches, build_queue, classify
-from kb.fetch import apply_outcome, content_hash, fetch_one, raw_document
+from kb.fetch import apply_outcome, content_hash, fetch_one, raw_document, settle_status
 from kb.fsutil import atomic_write_json, atomic_write_text
 from kb.sitemap import SitemapEntry, discover
 from kb.state import (
@@ -133,14 +133,23 @@ async def _fetch_chunks(
                 last_save = _clock()
 
 
-def _write_queue(paths: config.SitePaths, state: SiteState, run_id: str, budget: int | None) -> tuple[Path, int, int, int]:
+class QueueSummary(NamedTuple):
+    path: Path
+    queued: int
+    deferred: int
+    churning: int
+
+
+def _write_queue(paths: config.SitePaths, state: SiteState, run_id: str, budget: int | None) -> QueueSummary:
     for old in paths.staging.iterdir() if paths.staging.exists() else []:
         if old.is_dir() and old.name != run_id:
             shutil.rmtree(old, ignore_errors=True)
     run_dir = run_staging(paths, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    now_pages, deferred = build_queue(list(state.pages.values()), budget)
+    # Pages leaving the sitemap this run are archived by finalize; compiling them would waste the cap
+    leaving = set(state.progress.removed) if state.progress else set()
+    now_pages, deferred = build_queue([p for p in state.pages.values() if p.key not in leaving], budget)
     items = [
         QueueItem(
             slug=p.slug,
@@ -154,7 +163,7 @@ def _write_queue(paths: config.SitePaths, state: SiteState, run_id: str, budget:
     queue_path = run_dir / QUEUE_FILE
     atomic_write_json(queue_path, [i.model_dump() for i in items])
     churning = sum(1 for p in now_pages + deferred if p.churning)
-    return queue_path, len(items), len(deferred), churning
+    return QueueSummary(queue_path, len(items), len(deferred), churning)
 
 
 def prepare(
@@ -221,7 +230,7 @@ def prepare(
         )
 
     progress.fetch_done = True
-    queue_path, queued, deferred, churning = _write_queue(paths, state, run_id, budget)
+    queue = _write_queue(paths, state, run_id, budget)
     save_state(paths.state_file, state)
     if not site.first_sync_complete:
         site.first_sync_complete = True
@@ -229,11 +238,11 @@ def prepare(
 
     return PrepareResult(
         status="ready",
-        queue_size=queued,
-        deferred=deferred,
-        churning=churning,
-        estimated_cost_usd=round(queued * COST_PER_PAGE_USD, 2),
-        queue_file=str(queue_path),
+        queue_size=queue.queued,
+        deferred=queue.deferred,
+        churning=queue.churning,
+        estimated_cost_usd=round(queue.queued * COST_PER_PAGE_USD, 2),
+        queue_file=str(queue.path),
         **base,
     )
 
@@ -347,25 +356,22 @@ def prepare_local(root: Path, run_id: str | None = None, now_fn=config.utcnow) -
             continue
         page.content_hash = new_hash
         atomic_write_text(paths.raw / f"{page.slug}.md", raw_document(md, key, now))
-        if page.has_article and page.compiled_hash == new_hash:
-            page.status = PageStatus.COMPILED
-        else:
-            page.status, page.queued_at = PageStatus.PENDING, page.queued_at or now
+        settle_status(page, now)
         counts["changed"] += 1
 
     state.progress = FetchProgress(run_id=run_id, sitemap_keys=keys, fetch_done=True, fetch_counts=dict(counts))
-    queue_path, queued, deferred, churning = _write_queue(paths, state, run_id, None)
+    queue = _write_queue(paths, state, run_id, None)
     save_state(paths.state_file, state)
     return PrepareResult(
         status="ready",
         site=config.LOCAL_SITE_ID,
         run_id=run_id,
         fetched=dict(counts),
-        queue_size=queued,
-        deferred=deferred,
-        churning=churning,
-        estimated_cost_usd=round(queued * COST_PER_PAGE_USD, 2),
-        queue_file=str(queue_path),
+        queue_size=queue.queued,
+        deferred=queue.deferred,
+        churning=queue.churning,
+        estimated_cost_usd=round(queue.queued * COST_PER_PAGE_USD, 2),
+        queue_file=str(queue.path),
     )
 
 

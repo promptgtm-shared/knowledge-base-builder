@@ -137,3 +137,19 @@ def test_parse_lastmod_variants() -> None:
     assert parse_lastmod("2026-05-01T10:00:00+02:00").utcoffset().total_seconds() == 7200
     assert parse_lastmod("garbage") is None
     assert parse_lastmod(None) is None
+
+
+@respx.mock
+def test_nesting_deeper_than_limit_fails() -> None:
+    for i in range(7):
+        respx.get(f"https://example.com/s{i}.xml").mock(return_value=httpx.Response(200, text=index(f"https://example.com/s{i + 1}.xml")))
+    result = run("https://example.com/s0.xml")
+    assert not result.ok and "deeper than" in result.error
+
+
+@respx.mock
+def test_truncated_gzip_and_rss_root_fail_closed() -> None:
+    respx.get("https://example.com/sitemap.xml").mock(return_value=httpx.Response(200, content=b"\x1f\x8b\x08\x00broken"))
+    assert "invalid gzip" in run().error
+    respx.get("https://example.com/sitemap.xml").mock(return_value=httpx.Response(200, text="<rss><channel/></rss>"))
+    assert "unexpected root element <rss>" in run().error

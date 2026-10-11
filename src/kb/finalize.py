@@ -18,7 +18,6 @@ from kb.sync import QueueItem, load_queue, run_staging
 from kb.urls import is_local_key, normalize_url
 
 MIN_ARTICLE_CHARS = 200
-HEADER_FIELDS = ("Source", "Created", "Updated", "Topics")
 HEADER_RE = re.compile(r"^\*\*(Source|Created|Updated|Topics):\*\*\s*(.*)$")
 
 
@@ -111,8 +110,8 @@ def _publish(
     body = staged.read_text(encoding="utf-8")
     if len(body.strip()) < MIN_ARTICLE_CHARS:
         raise FinalizeError("staged article is too short")
-    existing = paths.wiki / page.article_rel if page.article_rel else None
-    created = read_header(existing).get("Created") if existing and existing.exists() else None
+    previous = [base / page.article_rel for base in (paths.wiki, paths.archive)] if page.article_rel else []
+    created = next((read_header(p).get("Created") for p in previous if p.exists()), None)
     source = page.loc if not is_local_key(page.key) else page.key
     article = render_article(body, source, taxonomy.get(topic, topic), created or today, today if created else None)
 
