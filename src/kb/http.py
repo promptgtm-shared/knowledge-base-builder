@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import random
+import ssl
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import cache
 
 import httpx
 from pydantic import BaseModel
@@ -63,9 +65,16 @@ def get_headers() -> dict[str, str]:
     }
 
 
+@cache
+def _ssl_context() -> ssl.SSLContext:
+    # Building the default context loads the CA bundle (~1s on Windows); reuse it
+    return httpx.create_ssl_context()
+
+
 def create_client(policy: HttpPolicy) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         http2=True,
+        verify=_ssl_context(),
         follow_redirects=True,
         timeout=httpx.Timeout(policy.timeout),
         limits=httpx.Limits(
