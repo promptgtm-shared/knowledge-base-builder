@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from kb import config
+from kb import config, locks, sync
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -156,3 +156,53 @@ def site_remove(
     except config.ConfigError as e:
         _fail(str(e))
     typer.echo(f"Removed '{site_id}'" + (" and deleted its files." if purge else " (files kept)."))
+
+
+def _emit(model) -> None:
+    typer.echo(model.model_dump_json(indent=2))
+
+
+@sync_app.command("prepare")
+def sync_prepare(
+    ctx: typer.Context,
+    site_id: str,
+    run_id: Annotated[str | None, typer.Option("--run-id", help="Continue or join an existing run.")] = None,
+    full: Annotated[bool, typer.Option("--full", help="Ignore lastmod and re-check every page's content.")] = False,
+    approve_archive: Annotated[
+        bool, typer.Option("--approve-archive", help="Release a held mass-archive (interactive runs only).")
+    ] = False,
+    unattended: Annotated[bool, typer.Option("--unattended", help="Apply the workspace compile cap.")] = False,
+    already_queued: Annotated[
+        int, typer.Option("--already-queued", help="Pages already queued by earlier sites in this unattended run.")
+    ] = 0,
+    time_budget: Annotated[float, typer.Option("--time-budget", help="Seconds before returning 'incomplete'.")] = sync.DEFAULT_TIME_BUDGET_S,
+) -> None:
+    """Discover, diff and fetch a site; print JSON with status incomplete | ready | failed."""
+    root = _root(ctx)
+    budget = sync.remaining_budget(root, already_queued) if unattended else None
+    try:
+        result = sync.prepare(
+            root,
+            site_id,
+            run_id,
+            full=full,
+            approve_archive=approve_archive and not unattended,
+            budget=budget,
+            time_budget_s=time_budget,
+        )
+    except (config.ConfigError, locks.LockLost) as e:
+        _fail(str(e))
+    except locks.LockHeld as e:
+        typer.echo(json.dumps({"status": "skipped", "message": str(e)}))
+        raise typer.Exit(code=3) from None
+    _emit(result)
+
+
+@sync_app.command("abort")
+def sync_abort(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Option("--run-id", help="Run to abort.")],
+) -> None:
+    """Release the workspace lock and discard this run's staging."""
+    released = sync.abort(_root(ctx), run_id)
+    typer.echo("Run aborted; lock released." if released else "Run aborted; lock was not held by this run.")

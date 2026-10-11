@@ -56,14 +56,22 @@ class Page(BaseModel):
         return self.change_streak >= CHURN_THRESHOLD
 
 
+class PendingFetch(BaseModel):
+    key: str
+    loc: str
+    lastmod: datetime | None = None
+
+
 class FetchProgress(BaseModel):
-    """Resumable state of a chunked `prepare` run."""
+    """Resumable state of a chunked `prepare` run, consumed by `finalize`."""
 
     run_id: str
-    remaining: list[str] = Field(default_factory=list)
+    remaining: list[PendingFetch] = Field(default_factory=list)
+    sitemap_keys: list[str] = Field(default_factory=list)
     removed: list[str] = Field(default_factory=list)
-    reappeared: list[str] = Field(default_factory=list)
-    counts: dict[str, int] = Field(default_factory=dict)
+    diff_counts: dict[str, int] = Field(default_factory=dict)
+    fetch_counts: dict[str, int] = Field(default_factory=dict)
+    fetch_done: bool = False
     started_at: datetime = Field(default_factory=utcnow)
 
 
