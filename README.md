@@ -1,203 +1,112 @@
 # Knowledge Base Builder
 
-Turn any website's sitemap into a structured, searchable wiki — in minutes, not months.
-
-## What it does
-
-Point it at a sitemap URL. It scrapes every page, converts to markdown, classifies content into topics, and compiles structured wiki articles with summaries, key takeaways, and cross-references.
-
-**Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).**
-
-## Results
-
-| Metric | Value |
-|--------|-------|
-| Pages processed | 10,782 |
-| Wiki articles created | 10,475 |
-| Topics auto-classified | 11 |
-| Total time | ~90 minutes |
-| Manual equivalent | 898 hours (112 working days) |
-| Speedup | **~600x** |
-
-## How it works
+A Claude Code plugin that turns websites into a structured markdown wiki and keeps it current. Point it at a sitemap once; after that it fetches only new or changed pages, recompiles just those articles, archives pages that disappear, and refreshes a [qmd](https://github.com/tobi/qmd) search collection so everything is searchable by keyword and meaning.
 
 ```
-sitemap.xml
-    |
-    v
-scrape.py (concurrent, rate-limited)
-    |
-    v
-raw/<domain>/*.md
-    |
-    v
-/compile-wiki (parallel Haiku sub-agents)
-    |
-    v
-wiki/<topic>/*.md (structured articles + indexes)
+sitemap.xml ──► diff vs state ──► fetch changed pages ──► raw markdown
+                                                              │
+qmd search ◄── qmd update + embed ◄── wiki + indexes ◄── Haiku compile agents
 ```
 
-### Pipeline phases
+## What a sync does
 
-1. **Scrape** — Fetches all pages from a sitemap XML (supports nested sitemaps). Concurrent with rate limiting and retry logic. Converts HTML to clean markdown.
+| Step | What happens | LLM cost |
+|------|--------------|----------|
+| Discover | Reads the sitemap (nested indexes and `.xml.gz` included). Any read failure stops the run before anything changes. | none |
+| Diff | Classifies every URL as new, updated, unchanged, removed or reappeared, using `<lastmod>` when the site provides it. | none |
+| Fetch | Fetches only what the diff needs (conditional GET), converts to markdown, and compares a content hash. A lastmod bump with identical content is not recompiled. | none |
+| Compile | Parallel Haiku sub-agents write articles for queued pages into a staging folder. | ~$0.004/page on API billing; included in a Claude subscription |
+| Finalize | Publishes staged articles into `wiki/<topic>/`, moves reclassified articles, archives removed pages, restores reappearing ones, rebuilds indexes, writes a run report. | none |
+| Index | Creates the site's qmd collection on first use, then `qmd update` + `qmd embed`. | none (local models) |
 
-2. **Ingest** — Converts local files (docx, pdf, txt) dropped in `input/` to markdown.
+## Install
 
-3. **Compile** — Spawns parallel Haiku sub-agents that read raw files, classify topics, and write structured wiki articles. Each article gets a summary, key takeaways, detailed content, and related concepts.
-
-4. **Index** — Builds a master index, per-topic indexes, and a compiled log. All indexes are idempotent and self-healing.
-
-5. **Cross-link** — Validates that articles reference related content.
-
-## Quick start
-
-### Prerequisites
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) package manager
-
-### Setup
-
-```bash
-git clone https://github.com/promptgtm/knowledge-base-builder.git
-cd knowledge-base-builder
-uv sync
-```
-
-### Usage
-
-#### Full pipeline (scrape + compile)
+Prerequisites: Claude Code (desktop app for scheduled syncs), [uv](https://docs.astral.sh/uv/), Python 3.12+, and qmd (`npm install -g @tobilu/qmd`).
 
 In Claude Code:
 
 ```
-/scrape-and-compile https://example.com/sitemap.xml
+/plugin marketplace add promptgtm-shared/knowledge-base-builder
+/plugin install kb-builder@kb-builder
 ```
 
-#### Compile only (from existing raw files)
+The plugin's `kb-builder` command creates its Python environment on first use.
+
+## Usage
+
+| Command | Purpose |
+|---------|---------|
+| `/kb-builder:add-site https://example.com/sitemap.xml` | Pick the workspace folder (first time), register a site, review its topics, run the first sync, offer scheduling |
+| `/kb-builder:sync <site-id\|all>` | Sync now. Flags: `--full` (re-check every page's content), `--approve-archive`, `--budget N` |
+| `/kb-builder:schedule <site-id>` | Sync automatically via a desktop scheduled task (`... off` to stop) |
+| `/kb-builder:status` | Sites, queues, held archives, pending indexing, last run report |
+| `/kb-builder:ingest` | Compile your own `.md`, `.txt`, `.docx`, `.pdf` files from `<workspace>/input/` |
+
+Search the result with qmd, e.g. `qmd search "pricing tiers" -c kb-example-com`.
+
+## Workspace layout
+
+All data lives in the workspace folder you choose during `/kb-builder:add-site` (saved by `kb-builder workspace set`), never inside the plugin:
 
 ```
-/compile-wiki raw/example.com/
+<workspace>/
+  sites.json                 # tracked sites + unattended_cap
+  input/                     # local documents for /kb-builder:ingest
+  sites/<site-id>/
+    wiki/                    # qmd collection kb-<site-id> points here
+      _master-index.md
+      <topic>/_index.md
+      <topic>/<slug>.md
+    archive/<topic>/<slug>.md
+    raw/<slug>.md
+    staging/<run-id>/        # compile agent output for the current run
+    runs/<timestamp>.md      # run reports
+    state.json               # per-page sync state
 ```
 
-#### Ingest local files + compile
+Each article starts with its title followed by `**Source:**` (page URL), `**Created:**`, `**Updated:**` (after a recompile) and `**Topics:**`, then Summary, Key Takeaways, Details and Related sections.
 
-Drop `.md`, `.txt`, `.docx`, or `.pdf` files into `input/`, then:
+## Sync behaviour worth knowing
 
-```
-/scrape-and-compile
-```
+- **Removed pages are archived, not deleted.** If a page comes back with the same content it is restored without a recompile.
+- **Mass-archive guard.** When a site has 10+ known pages and more than 20% vanish from the sitemap in one run, nothing is archived and the run report and `status` say so. Check the site, then run `/kb-builder:sync <site-id> --approve-archive`.
+- **Compile cap.** Unattended runs compile at most `unattended_cap` pages in total (default 50, in `sites.json`). The rest stay queued, oldest first, and are picked up by the next run. Pages whose content changes on every visit are flagged as churning and go last.
+- **Sites without `<lastmod>`.** Every page is re-fetched each run (cheap) and only compiled when its content hash changes. `--full` forces this for sites whose lastmod you don't trust.
+- **One sync at a time.** A workspace lock is shared by every step of a run; a run that finds it held reports `skipped`. A crashed run's lock expires after 6 hours.
+- **qmd refresh is global.** qmd cannot reindex a single collection, so `qmd update` reindexes all your collections and runs their `update:` hooks. It runs once per sync and only when a wiki changed. Set `KB_QMD_INDEX=<name>` to keep kb collections in a separate named qmd index instead (the default `qmd search` and qmd MCP server then won't see them).
+- **Your own files are safe.** Notes you add under a site's wiki are listed as untracked in run reports, never deleted. Manual edits to compiled articles are overwritten when that page is recompiled.
 
-### CLI scraper (standalone)
+## Scheduling
+
+`/kb-builder:schedule` creates one desktop scheduled task, `kb-builder-sync`, running `/kb-builder:sync all --unattended` for every site flagged as scheduled. Runs happen while the Claude desktop app is open; a missed run catches up on the next launch. Click **Run now** once and approve the tools it asks for so later runs never wait on a prompt.
+
+Headless alternative (no desktop app; requires a valid `claude auth login`):
 
 ```bash
-uv run python scrape.py https://example.com/sitemap.xml
-
-# With options
-uv run python scrape.py https://example.com/sitemap.xml \
-  -c 50 \
-  --min-delay 0.1 \
-  --max-delay 0.5
+claude -p "/kb-builder:sync all --unattended" --add-dir "<workspace>" --permission-mode dontAsk --allowedTools "Bash(kb-builder:*)" "Skill" "Agent" "Read" "Write" "AskUserQuestion"
 ```
 
-### CLI ingest (standalone)
+Run it from Windows Task Scheduler or cron with the workspace as working directory and an absolute path to `claude`. Don't use `--bare`; it skips installed plugins.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `No workspace configured` | Run `/kb-builder:add-site` (it asks for the folder) |
+| `qmd was not found on PATH` | Install qmd; the wiki is still updated and indexing is retried next sync |
+| `skipped: Workspace is locked` | Another sync is running; wait, or it expires 6 hours after its last activity |
+| `HELD ARCHIVE` in status | Review the listed URLs, then sync with `--approve-archive` |
+| Sitemap read failed | Nothing changed; check the sitemap URL shown by `kb-builder site show <id>` |
+
+## Development
 
 ```bash
-uv run python ingest.py
+uv sync
+uv run pytest
+uv run kb --help
 ```
 
-## Project structure
-
-```
-knowledge-base-builder/
-  scrape.py              # Sitemap scraper (async, concurrent)
-  ingest.py              # File converter (docx, pdf, txt -> markdown)
-  pyproject.toml         # Dependencies
-  .claude/
-    skills/
-      compile-wiki/      # Wiki compilation skill (parallel Haiku agents)
-      scrape-and-compile/ # End-to-end pipeline skill
-  input/                 # Drop files here for ingestion
-  raw/                   # Scraped/ingested markdown (intermediate)
-  wiki/                  # Compiled knowledge base (output)
-    _master-index.md     # Topic overview with article counts
-    _compiled-log.md     # Processing log
-    <topic>/
-      _index.md          # Topic article listing
-      <article>.md       # Structured wiki article
-```
-
-## Wiki article format
-
-Every compiled article follows this structure:
-
-```markdown
-# Descriptive Title
-
-**Source:** [original-file.md](../../raw/example.com/original-file.md)
-**Created:** 2026-04-14
-**Topics:** Topic Name
-
-## Summary
-2-3 sentence overview.
-
-## Key Takeaways
-- Takeaway 1
-- Takeaway 2
-- Takeaway 3
-
-## Details
-Expanded content. 200-500 words. No links.
-
-## Related
-- Related concept 1
-- Related concept 2
-```
-
-## Configuration
-
-### Scraper options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-c, --concurrency` | 10 | Max concurrent requests |
-| `--min-delay` | 0.5 | Min delay between requests (seconds) |
-| `--max-delay` | 2.0 | Max delay between requests (seconds) |
-| `--max-retries` | 3 | Max retries per page |
-| `-o, --output-dir` | `raw` | Output directory |
-
-### Compile tuning
-
-Edit `.claude/skills/compile-wiki/SKILL.md` to customize:
-
-- **Batch size** — Files per sub-agent (default: ~40)
-- **Parallel agents** — Max concurrent agents (default: 5)
-- **Topic taxonomy** — Add/remove topic categories
-- **Article format** — Modify the wiki article template
-- **Minimum file size** — Skip files smaller than N bytes (default: 200)
-
-## Key lessons from production use
-
-1. **Use absolute paths in agent prompts.** Sub-agents can lose working directory context.
-
-2. **Some agents process entire directories.** When given a batch of 100 dossier files, one agent compiled all 5,000+ in the directory. This is beneficial — let greedy agents run.
-
-3. **Watch for multiple file prefixes per category.** `integrations-action-*` and `integrations-data-points-*` are both "integrations" but need separate batch handling.
-
-4. **Indexes are self-healing.** Run the index builder after any compile pass. It scans the filesystem and rebuilds from scratch.
-
-5. **Increase concurrency for large sites.** Default scraper concurrency (10) is conservative. For 10K+ pages, bump to 50 with reduced delays.
-
-## Dependencies
-
-- [httpx](https://www.python-httpx.org/) — Async HTTP client with HTTP/2
-- [beautifulsoup4](https://www.crummy.com/software/BeautifulSoup/) — HTML parsing
-- [html2text](https://github.com/Alir3z4/html2text/) — HTML to markdown
-- [rich](https://rich.readthedocs.io/) — Terminal UI
-- [pydantic](https://docs.pydantic.dev/) — Config validation
-- [python-docx](https://python-docx.readthedocs.io/) — DOCX conversion
-- [pymupdf](https://pymupdf.readthedocs.io/) — PDF extraction
+The CLI (`src/kb/`) holds all deterministic logic: sitemap discovery, diffing, fetching, state, locking, finalize, indexes and qmd calls. Skills in `skills/` orchestrate it and run the LLM compile step. `bin/kb-builder` is the wrapper skills call; the plugin's `bin/` is on PATH inside Claude Code.
 
 ## License
 

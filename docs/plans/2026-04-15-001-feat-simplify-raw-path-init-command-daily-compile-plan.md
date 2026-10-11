@@ -1,11 +1,14 @@
 ---
 title: "Simplify raw/ path, add /init command, daily compile schedule"
 type: feat
-status: active
+status: superseded
 date: 2026-04-15
+superseded_by: docs/plans/2026-10-11-001-feat-sitemap-sync-qmd-plugin-plan.md
 ---
 
 # Simplify raw/ path, add /init command, daily compile schedule
+
+> Superseded by `docs/plans/2026-10-11-001-feat-sitemap-sync-qmd-plugin-plan.md`: output is now namespaced per site (`sites/<site-id>/raw/`) instead of a flat `raw/md/`, and scheduling uses the sync skill instead of a daily compile. The `/init` idea is deferred.
 
 ## Overview
 
