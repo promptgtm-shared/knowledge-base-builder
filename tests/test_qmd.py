@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from kb import config, locks
-from kb.qmd import Qmd, QmdError, refresh, subprocess_runner
+from kb.qmd import Qmd, QmdError, refresh, safe_text, site_contexts, subprocess_runner
 from kb.state import load_state, save_state
 
 DONE = "✓ Done! Embedded 4 chunks from 2 documents in 3s"
@@ -152,3 +152,22 @@ def test_remove_collection(tmp_path: Path) -> None:
     fake = FakeQmd(existing={"kb-alpha"})
     assert Qmd(fake).remove_collection("kb-alpha")
     assert not Qmd(FakeQmd()).remove_collection("kb-missing")
+
+
+def test_context_text_safe_for_windows_shim() -> None:
+    assert safe_text('Product & Features | "quoted" <x> 100%') == "Product and Features  quoted x 100"
+
+
+def test_site_contexts_wording(tmp_path: Path) -> None:
+    site = config.add_site(tmp_path, "https://example.com/sitemap.xml", description="Example docs")
+    contexts = site_contexts(site)
+    assert contexts["qmd://kb-example-com/"] == "Example docs. Start at _master-index.md."
+    assert contexts["qmd://kb-example-com/general"] == "General articles."
+
+
+def test_contexts_sent_sanitized(tmp_path: Path) -> None:
+    run_id = setup(tmp_path, {"alpha": True})
+    fake = FakeQmd()
+    refresh(tmp_path, run_id, Qmd(fake))
+    sent = [c[3] for c in fake.calls if c[0] == "context"]
+    assert "Product and Features articles." in sent and not any("&" in s for s in sent)

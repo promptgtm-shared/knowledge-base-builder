@@ -66,6 +66,12 @@ def subprocess_runner(binary: str | None = None) -> Runner:
     return run
 
 
+def safe_text(text: str) -> str:
+    """qmd.exe on Windows re-parses arguments through cmd.exe, so shell metacharacters split the command."""
+    text = text.replace("&", "and")
+    return re.sub(r'[|<>^%"!]', "", text).strip()
+
+
 def collection_name(site_id: str) -> str:
     return f"{COLLECTION_PREFIX}{site_id}"
 
@@ -75,7 +81,7 @@ def site_contexts(site: config.Site) -> dict[str, str]:
     root_text = site.description or (
         f"Knowledge base compiled from {site.sitemap_url}." if site.sitemap_url else "Knowledge base compiled from local files."
     )
-    contexts = {f"qmd://{name}/": f"{root_text} Start at _master-index.md."}
+    contexts = {f"qmd://{name}/": f"{root_text.rstrip('.')}. Start at _master-index.md."}
     for topic, label in site.taxonomy.items():
         contexts[f"qmd://{name}/{topic}"] = f"{label} articles."
     return contexts
@@ -105,7 +111,7 @@ class Qmd:
         return True
 
     def add_context(self, target: str, text: str) -> None:
-        self._check(["context", "add", target, text], timeout=60)
+        self._check(["context", "add", target, safe_text(text)], timeout=60)
 
     def update(self, timeout: float) -> None:
         self._check(["update"], timeout=timeout)
