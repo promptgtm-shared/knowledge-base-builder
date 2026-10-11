@@ -7,7 +7,7 @@ import httpx
 import respx
 from typer.testing import CliRunner
 
-from kb import config, locks, sync
+from kb import config, locks, staging, sync
 from kb.cli import app
 from kb.state import Page, PageStatus, load_state, save_state
 
@@ -20,7 +20,7 @@ def serve(slugs: list[str]) -> None:
     respx.get(SITEMAP).mock(return_value=httpx.Response(200, text=f"<urlset {NS}>{items}</urlset>"))
     body = "<html><body><article><h1>T</h1><p>" + "Real page content sentence. " * 10 + "</p></article></body></html>"
     for s in slugs:
-        respx.get(f"https://example.com/{s}").mock(return_value=httpx.Response(200, text=body.replace("T", s)))
+        respx.get(f"https://example.com/{s}").mock(return_value=httpx.Response(200, html=body.replace("T", s)))
 
 
 def seed_compiled(root: Path, slugs: list[str]) -> None:
@@ -70,7 +70,7 @@ def test_pages_leaving_sitemap_are_not_queued(tmp_path: Path) -> None:
 
     serve(["kept"])
     result = sync.prepare(tmp_path, "example-com", sleep=_no_sleep)
-    queued = [q.slug for q in sync.load_queue(Path(result.queue_file).parent)]
+    queued = [q.slug for q in staging.load_queue(Path(result.queue_file).parent)]
     assert queued == ["kept"]
     assert result.archive_pending == 1
     locks.release(config.WorkspacePaths(tmp_path).lock_file, result.run_id)

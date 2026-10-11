@@ -34,7 +34,7 @@ def urlset(pages: dict[str, str | None]) -> str:
 def mock_site(pages: dict[str, str | None], bodies: dict[str, str] | None = None) -> None:
     respx.get(SITEMAP).mock(return_value=httpx.Response(200, text=urlset(pages)))
     for p in pages:
-        respx.get(f"https://example.com/{p}").mock(return_value=httpx.Response(200, text=(bodies or {}).get(p, body(p))))
+        respx.get(f"https://example.com/{p}").mock(return_value=httpx.Response(200, html=(bodies or {}).get(p, body(p))))
 
 
 @pytest.fixture
@@ -91,18 +91,25 @@ def test_unchanged_site_second_run_fetches_lastmod_less_only_and_queues_nothing(
 def test_time_budget_returns_incomplete_and_resumes(root: Path, monkeypatch) -> None:
     pages = {f"p{i}": "2026-01-01" for i in range(15)}
     mock_site(pages)
-    # deadline, checkpoint start and first loop check see t=0; time has run out after the first chunk
-    ticks = iter([0.0, 0.0, 0.0])
-    monkeypatch.setattr(sync, "_clock", lambda: next(ticks, 1000.0))
+
+    def page_requests() -> int:
+        return sum(1 for call in respx.calls if str(call.request.url) != SITEMAP)
+
+    def sitemap_requests() -> int:
+        return sum(1 for call in respx.calls if str(call.request.url) == SITEMAP)
+
+    # Time "runs out" once 6 pages have been requested; the deadline is checked before every request
+    monkeypatch.setattr(sync, "_clock", lambda: 0.0 if page_requests() < 6 else 1000.0)
     first = run_prepare(root, time_budget_s=100)
-    assert first.status == "incomplete" and first.remaining_to_fetch == 5
+    assert first.status == "incomplete" and 0 < first.remaining_to_fetch < 15
+    fetched_first = page_requests()
 
     monkeypatch.setattr(sync, "_clock", lambda: 0.0)
-    calls_before = sum(r.call_count for r in respx.routes)
+    sitemap_reads = sitemap_requests()
     second = run_prepare(root, run_id=first.run_id)
     assert second.status == "ready" and second.queue_size == 15
-    fetched_now = sum(r.call_count for r in respx.routes) - calls_before
-    assert fetched_now == 5  # only the remaining chunk; no sitemap re-read
+    assert page_requests() - fetched_first == first.remaining_to_fetch  # resumes, no refetch
+    assert sitemap_requests() == sitemap_reads  # no sitemap re-read
 
 
 @respx.mock

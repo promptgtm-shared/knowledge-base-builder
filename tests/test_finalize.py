@@ -7,8 +7,8 @@ import pytest
 from kb import config, locks
 from kb.finalize import FinalizeError, finalize, render_article
 from kb.fsutil import atomic_write_json
+from kb.staging import QUEUE_FILE, QueueItem
 from kb.state import FetchProgress, Page, PageStatus, SiteState, load_state, save_state
-from kb.sync import QUEUE_FILE, QueueItem
 
 SITE = "example-com"
 NOW = datetime(2026, 4, 1, 12, tzinfo=UTC)

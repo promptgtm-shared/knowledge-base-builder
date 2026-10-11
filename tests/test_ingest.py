@@ -16,8 +16,8 @@ def compile_and_finalize(root: Path, run_id: str) -> dict:
     plan = sync.plan_batches(root, "local", run_id)
     for batch in plan.batches:
         for item in batch.items:
-            Path(item["output_path"]).write_text(ARTICLE.format(title=item["slug"]), encoding="utf-8")
-        Path(batch.manifest).write_text(json.dumps([{"slug": i["slug"], "topic": "general"} for i in batch.items]), encoding="utf-8")
+            Path(item.output_path).write_text(ARTICLE.format(title=item.slug), encoding="utf-8")
+        Path(batch.manifest).write_text(json.dumps([{"slug": i.slug, "topic": "general"} for i in batch.items]), encoding="utf-8")
     result = finalize(root, "local", run_id).model_dump()
     locks.release(config.WorkspacePaths(root).lock_file, run_id)
     return result
@@ -80,8 +80,9 @@ def test_cli_ingest_and_status(tmp_path: Path) -> None:
     text = runner.invoke(app, [*base, "status"]).output
     assert "Sync in progress" in text and "local - local files" in text and "queued for compile: 1" in text
 
-    statuses = json.loads(runner.invoke(app, [*base, "status", "--json"]).output)
-    assert {s["id"] for s in statuses} == {"example-com", "local"}
+    status = json.loads(runner.invoke(app, [*base, "status", "--json"]).output)
+    assert {s["id"] for s in status["sites"]} == {"example-com", "local"}
+    assert status["lock"]["run_id"] == result["run_id"] and status["unattended_cap"] == 50
 
     sync.abort(tmp_path, result["run_id"])
     assert "Sync in progress" not in runner.invoke(app, [*base, "status"]).output
@@ -98,5 +99,5 @@ def test_status_shows_held_archive_and_last_run(tmp_path: Path) -> None:
     state.qmd_dirty = True
     save_state(paths.state_file, state)
     text = CliRunner().invoke(app, ["--root", str(tmp_path), "status"]).output
-    assert "HELD ARCHIVE: 2 pages" in text and "--approve-archive" in text
+    assert "HELD ARCHIVE: 2 pages" in text and "--approve-archive" in text and "https://example.com/b" in text
     assert "last run: partial - runs/x.md" in text and "qmd pending" in text

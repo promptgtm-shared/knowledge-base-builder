@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import random
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,8 @@ from kb.state import Page, PageStatus, SiteState
 from kb.urls import assign_slug, normalize_url
 
 MIN_CONTENT_CHARS = 50
+MAX_PAGE_BYTES = 5_000_000
+HTML_TYPES = ("html", "xml")
 
 
 def normalize_markdown(md: str) -> str:
@@ -40,7 +43,7 @@ def _host(url: str) -> str:
 @dataclass
 class FetchOutcome:
     key: str
-    kind: Literal["content", "not_modified", "alias", "error"]
+    kind: Literal["content", "not_modified", "alias", "error", "deferred"]
     markdown: str | None = None
     final_url: str | None = None
     etag: str | None = None
@@ -56,7 +59,9 @@ async def fetch_one(
     policy: http.HttpPolicy,
     sitemap_keys: set[str],
     sleep: http.Sleep | None = None,
+    expired: Callable[[], bool] | None = None,
 ) -> FetchOutcome:
+    """Fetch one page. Returns kind "deferred" without a request once `expired()` is true."""
     headers: dict[str, str] = {}
     if page and page.content_hash:
         if page.etag:
@@ -65,6 +70,8 @@ async def fetch_one(
             headers["If-Modified-Since"] = page.last_modified
 
     async with sem:
+        if expired and expired():
+            return FetchOutcome(entry.key, "deferred")
         if sleep is None:
             await asyncio.sleep(random.uniform(policy.min_delay, policy.max_delay))
         try:
@@ -77,6 +84,11 @@ async def fetch_one(
         return FetchOutcome(entry.key, "not_modified", **validators)
     if resp.status != 200:
         return FetchOutcome(entry.key, "error", error=f"HTTP {resp.status}")
+    content_type = resp.headers.get("content-type", "").lower()
+    if content_type and not any(t in content_type for t in HTML_TYPES):
+        return FetchOutcome(entry.key, "error", final_url=resp.url, error=f"not an HTML page ({content_type.split(';')[0]})")
+    if len(resp.content) > MAX_PAGE_BYTES:
+        return FetchOutcome(entry.key, "error", final_url=resp.url, error=f"page larger than {MAX_PAGE_BYTES // 1_000_000} MB")
 
     final_key = normalize_url(resp.url)
     if final_key != entry.key:
@@ -86,7 +98,8 @@ async def fetch_one(
             return FetchOutcome(entry.key, "alias", final_url=final_key)
 
     try:
-        md = html_to_markdown(resp.text)
+        # Parsing is CPU-bound; keep the event loop free for the other in-flight requests
+        md = await asyncio.to_thread(html_to_markdown, resp.text)
     except Exception as e:  # noqa: BLE001 - one bad page must not stop the run
         return FetchOutcome(entry.key, "error", final_url=resp.url, error=f"convert failed: {e}")
     if len(md) < MIN_CONTENT_CHARS:
@@ -121,7 +134,7 @@ def apply_outcome(
     page.loc = entry.loc
     if outcome.kind == "error":
         page.last_error = outcome.error
-        if page.status in (PageStatus.COMPILED, PageStatus.ALIAS):
+        if page.status == PageStatus.COMPILED:
             page.status = PageStatus.FETCH_ERROR
         return "error"
 
@@ -137,6 +150,8 @@ def apply_outcome(
         page.status = PageStatus.ARCHIVED if page.status == PageStatus.ARCHIVED else PageStatus.ALIAS
         return "alias"
 
+    if page.status == PageStatus.ALIAS:
+        page.status = PageStatus.ARCHIVED if page.has_article else PageStatus.PENDING
     page.alias_of = None
     if outcome.final_url:
         page.final_url = outcome.final_url

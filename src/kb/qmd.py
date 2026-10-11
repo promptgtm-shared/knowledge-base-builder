@@ -17,7 +17,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from kb import config, locks
+from kb import config, locks, staging
 from kb.state import load_state, save_state
 
 COLLECTION_PREFIX = "kb-"
@@ -48,6 +48,9 @@ def subprocess_runner(binary: str | None = None) -> Runner:
     def run(args: list[str], timeout: float) -> tuple[int, str]:
         if not resolved:
             raise QmdError(f"`qmd` was not found on PATH. {INSTALL_HINT}")
+        unsafe = [a for a in args if SHELL_META_RE.search(a)]
+        if unsafe:
+            raise QmdError(f"Refusing to pass {unsafe[0]!r} to qmd: it contains characters cmd.exe would interpret.")
         env = {**os.environ, "NO_COLOR": "1", "FORCE_COLOR": "0"}
         try:
             proc = subprocess.run(
@@ -66,10 +69,12 @@ def subprocess_runner(binary: str | None = None) -> Runner:
     return run
 
 
+SHELL_META_RE = re.compile(r'[&|<>^%"!]')
+
+
 def safe_text(text: str) -> str:
     """qmd.exe on Windows re-parses arguments through cmd.exe, so shell metacharacters split the command."""
-    text = text.replace("&", "and")
-    return re.sub(r'[|<>^%"!]', "", text).strip()
+    return SHELL_META_RE.sub("", text.replace("&", "and")).strip()
 
 
 def collection_name(site_id: str) -> str:
@@ -156,6 +161,7 @@ def refresh(
 ) -> RefreshResult:
     """Refresh qmd for every dirty site, then release the run lock when nothing is left to do."""
     ws_paths = config.WorkspacePaths(root)
+    staging.validate_run_id(run_id)
     lock = locks.verify(ws_paths.lock_file, run_id)
     deadline = time.monotonic() + time_budget_s
     ws = config.load_workspace(root)
@@ -176,10 +182,11 @@ def refresh(
             name = collection_name(sid)
             if qmd.ensure_collection(name, paths.wiki):
                 result.created_collections.append(name)
+                state.qmd_contexts = {}
             for target, text in site_contexts(site).items():
-                if target not in state.qmd_contexts:
-                    qmd.add_context(target, text)
-                    state.qmd_contexts.append(target)
+                if state.qmd_contexts.get(target) != text:
+                    qmd.add_context(target, text)  # qmd replaces an existing context for the same target
+                    state.qmd_contexts[target] = text
             save_state(paths.state_file, state)
 
         # Global reindex once per run; a continuation of the same run skips it
@@ -197,7 +204,7 @@ def refresh(
                 result.embedded.append(sid)
             else:
                 result.still_dirty.append(sid)
-    except QmdError as e:
+    except Exception as e:  # noqa: BLE001 - this step owns the lock release, whatever failed
         result.status = "failed"
         result.message = f"{e} Wiki changes are saved; qmd will be retried on the next run."
         result.still_dirty = [sid for sid in dirty if states[sid].qmd_dirty]

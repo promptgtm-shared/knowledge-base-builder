@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from datetime import datetime
@@ -13,8 +12,8 @@ from pydantic import BaseModel, Field
 from kb import config, indexes, locks
 from kb.fsutil import atomic_write_text
 from kb.report import write_run_report
+from kb.staging import QueueItem, article_path, load_manifests, load_queue, run_dir
 from kb.state import Page, PageStatus, SiteState, load_state, save_state
-from kb.sync import QueueItem, load_queue, run_staging
 from kb.urls import is_local_key, normalize_url
 
 MIN_ARTICLE_CHARS = 200
@@ -33,6 +32,7 @@ class FinalizeResult(BaseModel):
     failed: list[str] = Field(default_factory=list)
     archived: int = 0
     restored: int = 0
+    requeued: int = 0
     dropped: int = 0
     archive_held: int = 0
     pending_after: int = 0
@@ -71,19 +71,6 @@ def render_article(body: str, source: str, topic_label: str, created: str, updat
     header.append(f"**Topics:** {topic_label}")
     body_text = re.sub(r"\n{3,}", "\n\n", "\n".join(rest)).strip()
     return f"{title}\n\n" + "\n".join(header) + f"\n\n{body_text}\n"
-
-
-def _load_manifests(run_dir: Path) -> dict[str, str]:
-    topics: dict[str, str] = {}
-    for manifest in sorted(run_dir.glob("manifest-*.json")):
-        try:
-            entries = json.loads(manifest.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
-            continue
-        for item in entries if isinstance(entries, list) else []:
-            if isinstance(item, dict) and item.get("slug") and item.get("topic"):
-                topics[str(item["slug"])] = str(item["topic"]).strip().strip("/")
-    return topics
 
 
 def _move(src: Path, dst: Path) -> None:
@@ -154,21 +141,36 @@ def _archive_aliases(paths: config.SitePaths, state: SiteState) -> int:
     return moved
 
 
-def _restore(paths: config.SitePaths, state: SiteState, sitemap_keys: set[str]) -> int:
-    restored = 0
+def _should_be_in_wiki(page: Page, sitemap_keys: set[str]) -> bool:
+    if not page.has_article:
+        return False
+    if page.status == PageStatus.ARCHIVED:
+        # Reappeared with unchanged content: restore without recompiling
+        return page.key in sitemap_keys and page.content_hash == page.compiled_hash
+    return page.status in (PageStatus.COMPILED, PageStatus.FETCH_ERROR)
+
+
+def _heal(paths: config.SitePaths, state: SiteState, sitemap_keys: set[str], now: datetime) -> tuple[int, int]:
+    """Every page that should have a wiki article gets one: restore it from archive/, or requeue it."""
+    restored = requeued = 0
     for page in state.pages.values():
-        if (
-            page.status == PageStatus.ARCHIVED
-            and page.key in sitemap_keys
-            and page.has_article
-            and page.content_hash == page.compiled_hash
-        ):
-            src = paths.archive / page.article_rel
-            if src.exists():
-                _move(src, paths.wiki / page.article_rel)
-                page.status = PageStatus.COMPILED
+        if not _should_be_in_wiki(page, sitemap_keys):
+            continue
+        wiki_copy = paths.wiki / page.article_rel
+        archive_copy = paths.archive / page.article_rel
+        if not wiki_copy.exists():
+            if archive_copy.exists():
+                _move(archive_copy, wiki_copy)
                 restored += 1
-    return restored
+            else:
+                page.status, page.queued_at = PageStatus.PENDING, now
+                if not (paths.raw / f"{page.slug}.md").exists():
+                    # Nothing to compile from: forget validators so the next prepare refetches it
+                    page.content_hash = page.lastmod = page.etag = page.last_modified = None
+                requeued += 1
+                continue
+        page.status = PageStatus.COMPILED if page.status == PageStatus.ARCHIVED else page.status
+    return restored, requeued
 
 
 def _expected_wiki_path(page: Page) -> str | None:
@@ -214,9 +216,9 @@ def finalize(root: Path, site_id: str, run_id: str, now: datetime | None = None)
     if progress is None or progress.run_id != run_id or not progress.fetch_done:
         raise FinalizeError(f"No completed prepare for run {run_id} on '{site_id}'. Run `kb sync prepare` first.")
 
-    run_dir = run_staging(paths, run_id)
-    queue = load_queue(run_dir)
-    topics = _load_manifests(run_dir)
+    staged_dir = run_dir(paths, run_id)
+    queue = load_queue(staged_dir)
+    topics = load_manifests(staged_dir)
     today = now.date().isoformat()
     result = FinalizeResult(site=site_id, run_id=run_id, status="ok")
 
@@ -224,22 +226,25 @@ def finalize(root: Path, site_id: str, run_id: str, now: datetime | None = None)
         page = state.pages.get(item.key)
         if page is None or page.status != PageStatus.PENDING or page.content_hash != item.raw_hash:
             continue  # stale queue entry: page changed or was handled since this run queued it
-        staged = run_dir / f"{item.slug}.md"
+        staged = article_path(staged_dir, item.slug)
         if not staged.exists():
             result.failed.append(f"{item.slug}: no staged article")
             continue
-        topic = topics.get(item.slug, "general")
+        # A batch whose agent died before writing its manifest keeps the page's previous topic
+        topic = topics.get(item.slug) or page.topic or "general"
         if topic not in site.taxonomy:
             topic = "general"
         try:
             _publish(paths, page, item, staged, topic, site.taxonomy, today)
             result.compiled += 1
-        except (FinalizeError, OSError) as e:
+        except (FinalizeError, OSError, ValueError) as e:
             result.failed.append(f"{item.slug}: {e}")
+    # Record publishes before moving anything else, so a later failure can't orphan them
+    save_state(paths.state_file, state)
 
     result.archived, result.dropped = _archive(paths, state, progress.removed)
     result.archived += _archive_aliases(paths, state)
-    result.restored = _restore(paths, state, set(progress.sitemap_keys))
+    result.restored, result.requeued = _heal(paths, state, set(progress.sitemap_keys), now)
     result.reconciled, result.untracked = _reconcile(paths, state)
 
     changed = result.compiled + result.archived + result.restored + len(result.reconciled)

@@ -34,7 +34,7 @@ def serve(pages: dict[str, tuple[str, str]]) -> None:
     items = "".join(f"<url><loc>https://example.com/{s}</loc><lastmod>{m}</lastmod></url>" for s, (m, _) in pages.items())
     respx.get(SITEMAP).mock(return_value=httpx.Response(200, text=f"<urlset {NS}>{items}</urlset>"))
     for slug, (_, title) in pages.items():
-        respx.get(f"https://example.com/{slug}").mock(return_value=httpx.Response(200, text=html(title)))
+        respx.get(f"https://example.com/{slug}").mock(return_value=httpx.Response(200, html=html(title)))
 
 
 def fake_agents(root: Path, run_id: str, topic: str = "general") -> list[str]:
@@ -44,10 +44,10 @@ def fake_agents(root: Path, run_id: str, topic: str = "general") -> list[str]:
     for batch in plan.batches:
         manifest = []
         for item in batch.items:
-            title = Path(item["raw_path"]).read_text(encoding="utf-8").split("# ", 1)[1].splitlines()[0]
-            Path(item["output_path"]).write_text(ARTICLE.format(title=title), encoding="utf-8")
-            manifest.append({"slug": item["slug"], "topic": topic})
-            compiled.append(item["slug"])
+            title = Path(item.raw_path).read_text(encoding="utf-8").split("# ", 1)[1].splitlines()[0]
+            Path(item.output_path).write_text(ARTICLE.format(title=title), encoding="utf-8")
+            manifest.append({"slug": item.slug, "topic": topic})
+            compiled.append(item.slug)
         Path(batch.manifest).write_text(json.dumps(manifest), encoding="utf-8")
     return compiled
 

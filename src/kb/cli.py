@@ -61,6 +61,22 @@ def workspace_show(ctx: typer.Context) -> None:
     typer.echo(str(_root(ctx)))
 
 
+@workspace_app.command("cap")
+def workspace_cap(
+    ctx: typer.Context,
+    pages: Annotated[int | None, typer.Argument(help="New total pages compiled per unattended run.")] = None,
+) -> None:
+    """Show or set the unattended compile cap (total pages per scheduled run)."""
+    root = _root(ctx)
+    ws = config.load_workspace(root)
+    if pages is not None:
+        if pages < 1:
+            _fail("The cap must be at least 1.")
+        ws.unattended_cap = pages
+        config.save_workspace(root, ws)
+    typer.echo(json.dumps({"unattended_cap": ws.unattended_cap}))
+
+
 @app.command()
 def status(
     ctx: typer.Context,
@@ -68,17 +84,20 @@ def status(
 ) -> None:
     """Show tracked sites, queue sizes, held archives and the last run."""
     root = _root(ctx)
-    statuses = sync.site_statuses(root)
+    ws_status = sync.workspace_status(root)
     if as_json:
-        typer.echo(json.dumps([s.model_dump() for s in statuses], indent=2))
+        _emit(ws_status)
         return
-    if not statuses:
+    if not ws_status.sites:
         typer.echo(f"No sites registered in {root}.")
         return
-    lock = locks.read_lock(config.WorkspacePaths(root).lock_file)
-    if lock and not locks.is_stale(lock):
+    lock = ws_status.lock
+    if lock and not lock.stale:
         typer.echo(f"Sync in progress: run {lock.run_id} ({lock.label}).")
-    for s in statuses:
+    elif lock:
+        typer.echo(f"Stale lock from run {lock.run_id} (last active {lock.heartbeat_at}); the next sync reclaims it.")
+    typer.echo(f"Unattended cap: {ws_status.unattended_cap} pages per run.")
+    for s in ws_status.sites:
         flags = ", ".join(f for f, on in (("scheduled", s.scheduled), ("qmd pending", s.qmd_dirty)) if on)
         typer.echo("")
         typer.echo(f"{s.id} - {s.source}" + (f" [{flags}]" if flags else ""))
@@ -87,7 +106,11 @@ def status(
         if s.queued:
             typer.echo(f"  queued for compile: {s.queued}" + (f" ({s.churning} churning)" if s.churning else ""))
         if s.archive_held:
-            typer.echo(f"  HELD ARCHIVE: {s.archive_held} pages vanished at once; review, then sync {s.id} --approve-archive")
+            typer.echo(
+                f"  HELD ARCHIVE: {len(s.archive_held)} pages vanished at once; review, then sync {s.id} --approve-archive"
+            )
+            for url in s.archive_held[:10]:
+                typer.echo(f"    {url}")
         if s.last_run:
             typer.echo(f"  last run: {s.last_run.get('status')} - {s.last_run.get('report')}")
 
@@ -120,7 +143,8 @@ def site_add(
         site = config.add_site(_root(ctx), sitemap_url, site_id=site_id, description=description)
     except config.ConfigError as e:
         _fail(str(e))
-    typer.echo(f"Registered '{site.id}' -> {config.WorkspacePaths(_root(ctx)).site(site.id).root}")
+    paths = config.WorkspacePaths(_root(ctx)).site(site.id)
+    typer.echo(json.dumps({"id": site.id, "path": str(paths.root), "wiki": str(paths.wiki)}))
 
 
 @site_app.command("list")
@@ -174,6 +198,11 @@ def site_update(
             if not isinstance(taxonomy, dict) or not taxonomy:
                 raise config.ConfigError("Taxonomy file must be a non-empty JSON object.")
             taxonomy.setdefault("general", "General")
+            for folder in taxonomy:
+                try:
+                    config.check_name(str(folder), "Topic folder")
+                except ValueError as e:
+                    raise config.ConfigError(str(e)) from None
             site.taxonomy = {str(k): str(v) for k, v in taxonomy.items()}
         if scheduled is not None:
             if scheduled and not site.first_sync_complete:
@@ -222,7 +251,7 @@ def sync_prepare(
     ] = False,
     unattended: Annotated[bool, typer.Option("--unattended", help="Apply the workspace compile cap.")] = False,
     already_queued: Annotated[
-        int, typer.Option("--already-queued", help="Pages already queued by earlier sites in this unattended run.")
+        int, typer.Option("--already-queued", help="Pages already queued by earlier sites in this run (cap/budget are totals).")
     ] = 0,
     budget: Annotated[
         int | None, typer.Option("--budget", help="Compile at most this many pages now (others stay queued).")
@@ -233,6 +262,8 @@ def sync_prepare(
     root = _root(ctx)
     if unattended:
         budget = sync.remaining_budget(root, already_queued)
+    elif budget is not None:
+        budget = max(budget - already_queued, 0)  # --budget is a total across the sites of one run
     try:
         result = sync.prepare(
             root,
@@ -248,6 +279,8 @@ def sync_prepare(
     except locks.LockHeld as e:
         typer.echo(json.dumps({"status": "skipped", "message": str(e)}))
         raise typer.Exit(code=3) from None
+    if unattended and approve_archive:
+        result.message = (result.message + " " if result.message else "") + "--approve-archive is ignored in unattended runs."
     _emit(result)
 
 
@@ -257,7 +290,10 @@ def sync_abort(
     run_id: Annotated[str, typer.Option("--run-id", help="Run to abort.")],
 ) -> None:
     """Release the workspace lock and discard this run's staging."""
-    released = sync.abort(_root(ctx), run_id)
+    try:
+        released = sync.abort(_root(ctx), run_id)
+    except config.ConfigError as e:
+        _fail(str(e))
     typer.echo("Run aborted; lock released." if released else "Run aborted; lock was not held by this run.")
 
 

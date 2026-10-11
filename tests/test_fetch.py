@@ -56,7 +56,7 @@ def body_hash(html: str) -> str:
 
 @respx.mock
 def test_content_outcome_records_validators() -> None:
-    respx.get(url("a")).mock(return_value=httpx.Response(200, text=BODY, headers={"ETag": '"v1"'}))
+    respx.get(url("a")).mock(return_value=httpx.Response(200, html=BODY, headers={"ETag": '"v1"'}))
     out = fetch(entry("a"))
     assert out.kind == "content" and out.etag == '"v1"' and "Title" in out.markdown
 
@@ -72,7 +72,7 @@ def test_conditional_get_304() -> None:
 @respx.mock
 def test_redirect_to_other_sitemap_url_is_alias() -> None:
     respx.get(url("old")).mock(return_value=httpx.Response(301, headers={"Location": url("new")}))
-    respx.get(url("new")).mock(return_value=httpx.Response(200, text=BODY))
+    respx.get(url("new")).mock(return_value=httpx.Response(200, html=BODY))
     out = fetch(entry("old"), sitemap_keys={url("old"), url("new")})
     assert out.kind == "alias" and out.final_url == url("new")
 
@@ -80,7 +80,7 @@ def test_redirect_to_other_sitemap_url_is_alias() -> None:
 @respx.mock
 def test_off_site_redirect_is_error() -> None:
     respx.get(url("x")).mock(return_value=httpx.Response(302, headers={"Location": "https://login.other.com/"}))
-    respx.get("https://login.other.com/").mock(return_value=httpx.Response(200, text=BODY))
+    respx.get("https://login.other.com/").mock(return_value=httpx.Response(200, html=BODY))
     out = fetch(entry("x"))
     assert out.kind == "error" and "off-site" in out.error
 
@@ -88,7 +88,7 @@ def test_off_site_redirect_is_error() -> None:
 @respx.mock
 def test_404_and_empty_and_5xx_are_errors() -> None:
     respx.get(url("gone")).mock(return_value=httpx.Response(404))
-    respx.get(url("empty")).mock(return_value=httpx.Response(200, text="<html><body><p>hi</p></body></html>"))
+    respx.get(url("empty")).mock(return_value=httpx.Response(200, html="<html><body><p>hi</p></body></html>"))
     respx.get(url("down")).mock(return_value=httpx.Response(503))
     assert fetch(entry("gone")).error == "HTTP 404"
     assert "empty" in fetch(entry("empty")).error
@@ -97,7 +97,7 @@ def test_404_and_empty_and_5xx_are_errors() -> None:
 
 @respx.mock
 def test_429_retry_after_then_success() -> None:
-    respx.get(url("a")).mock(side_effect=[httpx.Response(429, headers={"Retry-After": "1"}), httpx.Response(200, text=BODY)])
+    respx.get(url("a")).mock(side_effect=[httpx.Response(429, headers={"Retry-After": "1"}), httpx.Response(200, html=BODY)])
     assert fetch(entry("a")).kind == "content"
 
 

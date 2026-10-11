@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from kb.fsutil import atomic_write_json
 from kb.urls import normalize_url, site_id_from_url
@@ -31,6 +32,16 @@ DEFAULT_TAXONOMY: dict[str, str] = {
 
 class ConfigError(Exception):
     pass
+
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+def check_name(value: str, what: str) -> str:
+    """Site ids and topic folders become directory names and qmd arguments."""
+    if not NAME_RE.match(value):
+        raise ValueError(f"{what} {value!r} must be lowercase letters, digits and hyphens (max 63, no leading hyphen)")
+    return value
 
 
 def pointer_file() -> Path:
@@ -72,6 +83,18 @@ class Site(BaseModel):
     first_sync_complete: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     last_sync_at: datetime | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        return check_name(value, "Site id")
+
+    @field_validator("taxonomy")
+    @classmethod
+    def _valid_taxonomy(cls, value: dict[str, str]) -> dict[str, str]:
+        for folder in value:
+            check_name(folder, "Topic folder")
+        return value
 
     @property
     def is_local(self) -> bool:
@@ -171,7 +194,10 @@ def add_site(root: Path, sitemap_url: str, site_id: str | None = None, descripti
         if existing.sitemap_url and normalize_url(existing.sitemap_url) == key:
             raise ConfigError(f"Sitemap already registered as '{existing.id}'.")
 
-    site = Site(id=site_id, sitemap_url=sitemap_url, description=description)
+    try:
+        site = Site(id=site_id, sitemap_url=sitemap_url, description=description)
+    except ValueError as e:
+        raise ConfigError(str(e).splitlines()[-1].strip()) from None
     ws.sites[site_id] = site
     WorkspacePaths(root).site(site_id).create()
     save_workspace(root, ws)

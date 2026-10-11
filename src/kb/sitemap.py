@@ -29,6 +29,7 @@ class SitemapResult:
     error: str | None = None
     failed_url: str | None = None
     sitemaps_read: int = 0
+    skipped: int = 0
 
     @property
     def ok(self) -> bool:
@@ -106,7 +107,10 @@ async def discover(
     kwargs = {"sleep": sleep} if sleep else {}
 
     async def walk(url: str, depth: int) -> None:
-        key = normalize_url(url)
+        try:
+            key = normalize_url(url)
+        except ValueError as e:
+            raise _Failure(url, f"invalid sitemap URL ({e})") from None
         if key in visited:
             return
         if depth > max_depth:
@@ -130,7 +134,12 @@ async def discover(
         for loc, lastmod in items:
             if not loc.lower().startswith(("http://", "https://")):
                 continue
-            entry = SitemapEntry(key=normalize_url(loc), loc=loc, lastmod=parse_lastmod(lastmod))
+            try:
+                key = normalize_url(loc)
+            except ValueError:
+                result.skipped += 1  # one malformed page URL must not fail the whole site
+                continue
+            entry = SitemapEntry(key=key, loc=loc, lastmod=parse_lastmod(lastmod))
             prev = found.get(entry.key)
             if prev is None or (entry.lastmod and (prev.lastmod is None or entry.lastmod > prev.lastmod)):
                 found[entry.key] = entry
@@ -139,6 +148,8 @@ async def discover(
         await walk(sitemap_url, 0)
     except _Failure as f:
         return SitemapResult(error=f.reason, failed_url=f.url, sitemaps_read=result.sitemaps_read)
+    except ValueError as e:  # anything else malformed in the document fails closed too
+        return SitemapResult(error=f"malformed sitemap ({e})", failed_url=sitemap_url, sitemaps_read=result.sitemaps_read)
 
     result.entries = list(found.values())
     return result
