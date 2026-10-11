@@ -151,10 +151,18 @@ def site_remove(
     purge: Annotated[bool, typer.Option("--purge", help="Also delete the site's folder and qmd collection.")] = False,
 ) -> None:
     """Deregister a site (files are kept unless --purge)."""
+    from kb.qmd import Qmd, QmdError, collection_name
+
     try:
         config.remove_site(_root(ctx), site_id, purge=purge)
     except config.ConfigError as e:
         _fail(str(e))
+    if purge:
+        try:
+            if Qmd().remove_collection(collection_name(site_id)):
+                typer.echo(f"Removed qmd collection {collection_name(site_id)}.")
+        except QmdError as e:
+            typer.echo(f"Warning: could not remove qmd collection: {e}", err=True)
     typer.echo(f"Removed '{site_id}'" + (" and deleted its files." if purge else " (files kept)."))
 
 
@@ -220,5 +228,21 @@ def sync_finalize(
     try:
         result = finalize(_root(ctx), site_id, run_id)
     except (config.ConfigError, locks.LockLost, FinalizeError) as e:
+        _fail(str(e))
+    _emit(result)
+
+
+@qmd_app.command("refresh")
+def qmd_refresh(
+    ctx: typer.Context,
+    run_id: Annotated[str, typer.Option("--run-id", help="Run to finish; the lock is released when done.")],
+    time_budget: Annotated[float, typer.Option("--time-budget", help="Seconds before returning 'incomplete'.")] = 480.0,
+) -> None:
+    """Index and embed every site whose wiki changed; print JSON with status done | incomplete | failed | skipped."""
+    from kb.qmd import refresh
+
+    try:
+        result = refresh(_root(ctx), run_id, time_budget_s=time_budget)
+    except locks.LockLost as e:
         _fail(str(e))
     _emit(result)
