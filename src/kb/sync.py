@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import time
 from collections import Counter
@@ -243,3 +244,48 @@ def abort(root: Path, run_id: str) -> bool:
 
 def remaining_budget(root: Path, used: int) -> int:
     return max(config.load_workspace(root).unattended_cap - used, 0)
+
+
+class Batch(BaseModel):
+    batch: int
+    manifest: str
+    items: list[dict[str, str]]
+
+
+class BatchPlan(BaseModel):
+    site: str
+    run_id: str
+    staging_dir: str
+    taxonomy: dict[str, str]
+    total: int
+    batches: list[Batch]
+
+
+def plan_batches(root: Path, site_id: str, run_id: str, size: int = 25) -> BatchPlan:
+    """Split this run's queue into compile batches with absolute input/output paths."""
+    site = config.get_site(config.load_workspace(root), site_id)
+    run_dir = run_staging(config.WorkspacePaths(root).site(site_id), run_id)
+    queue_file = run_dir / QUEUE_FILE
+    if not queue_file.exists():
+        raise config.ConfigError(f"No queue for run {run_id} on '{site_id}'. Run `kb sync prepare` first.")
+    items = [QueueItem.model_validate(q) for q in json.loads(queue_file.read_text(encoding="utf-8"))]
+    size = max(size, 1)
+    batches = [
+        Batch(
+            batch=n + 1,
+            manifest=str((run_dir / f"manifest-{n + 1}.json").resolve()),
+            items=[
+                {"slug": i.slug, "source_url": i.loc, "raw_path": i.raw_path, "output_path": str((run_dir / f"{i.slug}.md").resolve())}
+                for i in items[start:start + size]
+            ],
+        )
+        for n, start in enumerate(range(0, len(items), size))
+    ]
+    return BatchPlan(
+        site=site_id,
+        run_id=run_id,
+        staging_dir=str(run_dir.resolve()),
+        taxonomy=site.taxonomy,
+        total=len(items),
+        batches=batches,
+    )

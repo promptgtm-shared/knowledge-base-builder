@@ -246,3 +246,18 @@ def qmd_refresh(
     except locks.LockLost as e:
         _fail(str(e))
     _emit(result)
+
+
+@sync_app.command("batches")
+def sync_batches(
+    ctx: typer.Context,
+    site_id: str,
+    run_id: Annotated[str, typer.Option("--run-id", help="Run whose queue to split.")],
+    size: Annotated[int, typer.Option("--size", help="Pages per compile agent.")] = 25,
+) -> None:
+    """Print this run's compile queue as batches (JSON) for the compile agents."""
+    try:
+        plan = sync.plan_batches(_root(ctx), site_id, run_id, size)
+    except config.ConfigError as e:
+        _fail(str(e))
+    _emit(plan)
