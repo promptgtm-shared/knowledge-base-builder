@@ -8,7 +8,6 @@ from kb.cli import app
 from kb.finalize import finalize
 from kb.state import PageStatus, load_state
 
-
 ARTICLE = "# {title}\n\n## Summary\n\n" + "Summary sentence about the ingested document. " * 6 + "\n"
 FIXTURE_DOCX = Path(__file__).parent / "fixtures" / "docs" / "guide.docx"
 

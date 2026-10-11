@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import respx
+from test_qmd import FakeQmd
 from typer.testing import CliRunner
 
 from kb import config, locks, sync
@@ -13,8 +14,6 @@ from kb.finalize import finalize
 from kb.http import HttpPolicy
 from kb.qmd import Qmd, refresh
 from kb.state import PageStatus, load_state
-
-from test_qmd import FakeQmd
 
 SITEMAP = "https://example.com/sitemap.xml"
 POLICY = HttpPolicy(max_retries=1, concurrency=2)

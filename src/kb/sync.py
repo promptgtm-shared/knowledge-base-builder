@@ -13,12 +13,20 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from kb import config, http, locks
-from kb.diff import approval_matches, build_queue, classify
 from kb.convert import document_to_markdown
+from kb.diff import approval_matches, build_queue, classify
 from kb.fetch import apply_outcome, content_hash, fetch_one, raw_document
 from kb.fsutil import atomic_write_json, atomic_write_text
 from kb.sitemap import SitemapEntry, discover
-from kb.state import FetchProgress, Page, PageStatus, PendingFetch, SiteState, load_state, save_state
+from kb.state import (
+    FetchProgress,
+    Page,
+    PageStatus,
+    PendingFetch,
+    SiteState,
+    load_state,
+    save_state,
+)
 from kb.urls import assign_slug, local_key
 
 COST_PER_PAGE_USD = 0.004

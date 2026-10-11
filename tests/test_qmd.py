@@ -59,7 +59,7 @@ def test_new_collection_created_with_contexts_then_update_and_embed(tmp_path: Pa
     assert cmds[:2] == ["collection show", "collection add"]
     assert cmds.count("update") == 1 and cmds.index("update") > cmds.index("collection add")
     contexts = [c for c in fake.calls if c[0] == "context"]
-    assert ["context", "add", "qmd://kb-alpha/"] == contexts[0][:3]
+    assert contexts[0][:3] == ["context", "add", "qmd://kb-alpha/"]
     assert any(c[2] == "qmd://kb-alpha/general" for c in contexts)
     assert fake.calls[-1][:3] == ["embed", "-c", "kb-alpha"]
     assert not site_state(tmp_path, "alpha").qmd_dirty
