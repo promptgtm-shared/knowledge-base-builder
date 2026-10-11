@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Plugin bin/ is on PATH inside Claude Code; runs the kb CLI from the plugin's locked environment.
+set -euo pipefail
+export PYTHONIOENCODING=utf-8
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec uv run --quiet --frozen --project "$PLUGIN_ROOT" kb "$@"

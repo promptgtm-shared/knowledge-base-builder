@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +31,32 @@ DEFAULT_TAXONOMY: dict[str, str] = {
 
 class ConfigError(Exception):
     pass
+
+
+def pointer_file() -> Path:
+    base = os.environ.get("KB_BUILDER_HOME")
+    return (Path(base) if base else Path.home() / ".config" / "kb-builder") / "workspace"
+
+
+def set_default_root(path: Path) -> Path:
+    root = path.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    pointer = pointer_file()
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(str(root), encoding="utf-8")
+    return root
+
+
+def resolve_root(explicit: Path | None) -> Path | None:
+    """--root / KB_ROOT first, then the saved workspace pointer."""
+    if explicit is not None:
+        return explicit.expanduser().resolve()
+    pointer = pointer_file()
+    if pointer.exists():
+        saved = pointer.read_text(encoding="utf-8").strip()
+        if saved:
+            return Path(saved)
+    return None
 
 
 def utcnow() -> datetime:
