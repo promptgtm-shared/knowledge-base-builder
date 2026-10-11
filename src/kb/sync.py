@@ -413,6 +413,7 @@ class LockStatus(BaseModel):
 class WorkspaceStatus(BaseModel):
     root: str
     unattended_cap: int
+    qmd_installed: bool
     lock: LockStatus | None
     sites: list[SiteStatus]
 
@@ -449,4 +450,10 @@ def workspace_status(root: Path) -> WorkspaceStatus:
         if lock
         else None
     )
-    return WorkspaceStatus(root=str(root), unattended_cap=ws.unattended_cap, lock=lock_status, sites=sites)
+    return WorkspaceStatus(
+        root=str(root),
+        unattended_cap=ws.unattended_cap,
+        qmd_installed=shutil.which("qmd") is not None,
+        lock=lock_status,
+        sites=sites,
+    )

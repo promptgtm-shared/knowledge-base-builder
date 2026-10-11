@@ -25,7 +25,8 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 NOTHING_PENDING = ("All content hashes already have embeddings", "No non-empty documents to embed")
 EMBED_FAILURES = "still failed after retries"
 MAX_EMBED_PASSES = 3
-INSTALL_HINT = "Install it with `npm install -g @tobilu/qmd` (or bun), then rerun `kb qmd refresh`."
+INSTALL_COMMANDS = ["npm install -g @tobilu/qmd", "bun install -g @tobilu/qmd"]
+INSTALL_HINT = f"Install it with `{INSTALL_COMMANDS[0]}` (or `{INSTALL_COMMANDS[1]}`); the next sync indexes everything."
 
 
 EmbedOutcome = Literal["done", "timeout", "failed"]
@@ -94,7 +95,15 @@ def site_contexts(site: config.Site) -> dict[str, str]:
 
 class Qmd:
     def __init__(self, runner: Runner | None = None) -> None:
-        self.run = runner or subprocess_runner()
+        self.binary = None if runner else shutil.which("qmd")
+        self.available = runner is not None or self.binary is not None
+        self.run = runner or subprocess_runner(self.binary)
+
+    def version(self) -> str | None:
+        if not self.available:
+            return None
+        code, out = self.run(["--version"], 30)
+        return out.strip().splitlines()[0] if code == 0 and out.strip() else None
 
     def _check(self, args: list[str], timeout: float = 300) -> str:
         code, out = self.run(args, timeout)
@@ -150,7 +159,21 @@ class RefreshResult(BaseModel):
     embedded: list[str] = Field(default_factory=list)
     still_dirty: list[str] = Field(default_factory=list)
     created_collections: list[str] = Field(default_factory=list)
+    qmd_missing: bool = False
     message: str = ""
+
+
+class QmdCheck(BaseModel):
+    installed: bool
+    path: str | None = None
+    version: str | None = None
+    install_commands: list[str] = Field(default_factory=lambda: list(INSTALL_COMMANDS))
+    models_command: str = "qmd pull"
+
+
+def check(qmd: Qmd | None = None) -> QmdCheck:
+    qmd = qmd or Qmd()
+    return QmdCheck(installed=qmd.available, path=qmd.binary, version=qmd.version())
 
 
 def refresh(
@@ -176,6 +199,15 @@ def refresh(
         return result
 
     qmd = qmd or Qmd()
+    if not qmd.available:
+        # Search is optional: wikis are saved and stay marked, so the first sync after install indexes them
+        locks.release(ws_paths.lock_file, run_id)
+        result.status = "skipped"
+        result.qmd_missing = True
+        result.still_dirty = dirty
+        result.message = f"qmd is not installed, so search indexing is pending for: {', '.join(dirty)}. {INSTALL_HINT}"
+        return result
+
     try:
         for sid in dirty:
             site, state, paths = ws.sites[sid], states[sid], ws_paths.site(sid)

@@ -100,6 +100,8 @@ def status(
     elif lock:
         typer.echo(f"Stale lock from run {lock.run_id} (last active {lock.heartbeat_at}); the next sync reclaims it.")
     typer.echo(f"Unattended cap: {ws_status.unattended_cap} pages per run.")
+    if not ws_status.qmd_installed and any(s.qmd_dirty for s in ws_status.sites):
+        typer.echo("Search: qmd is not installed; indexing is pending (`kb-builder qmd check` shows how to install).")
     for s in ws_status.sites:
         flags = ", ".join(f for f, on in (("scheduled", s.scheduled), ("qmd pending", s.qmd_dirty)) if on)
         typer.echo("")
@@ -325,6 +327,14 @@ def sync_finalize(
     except (config.ConfigError, locks.LockLost, FinalizeError) as e:
         _fail(str(e))
     _emit(result)
+
+
+@qmd_app.command("check")
+def qmd_check() -> None:
+    """Report whether qmd is installed (JSON), with the install commands if not."""
+    from kb.qmd import check
+
+    _emit(check())
 
 
 @qmd_app.command("refresh")
