@@ -69,3 +69,8 @@ def test_thousand_urls_unique() -> None:
         s = assign_slug(normalize_url(url), taken)
         assert s not in taken
         taken.add(s)
+
+
+def test_slug_never_starts_with_underscore() -> None:
+    assert base_slug(normalize_url("https://example.com/_index")) == "index"
+    assert base_slug(normalize_url("https://example.com/__master-index")) == "master-index"

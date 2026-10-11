@@ -206,3 +206,19 @@ def sync_abort(
     """Release the workspace lock and discard this run's staging."""
     released = sync.abort(_root(ctx), run_id)
     typer.echo("Run aborted; lock released." if released else "Run aborted; lock was not held by this run.")
+
+
+@sync_app.command("finalize")
+def sync_finalize(
+    ctx: typer.Context,
+    site_id: str,
+    run_id: Annotated[str, typer.Option("--run-id", help="Run whose staged articles to publish.")],
+) -> None:
+    """Publish staged articles, archive/restore pages, rebuild indexes; print JSON."""
+    from kb.finalize import FinalizeError, finalize
+
+    try:
+        result = finalize(_root(ctx), site_id, run_id)
+    except (config.ConfigError, locks.LockLost, FinalizeError) as e:
+        _fail(str(e))
+    _emit(result)

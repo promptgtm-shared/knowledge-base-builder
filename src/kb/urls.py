@@ -48,7 +48,7 @@ def short_hash(value: str, length: int = 8) -> str:
 
 def _clean_segment(segment: str) -> str:
     ascii_text = unicodedata.normalize("NFKD", segment).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9_]+", "-", ascii_text.lower()).strip("-")
+    return re.sub(r"[^a-z0-9_]+", "-", ascii_text.lower()).strip("-_")
 
 
 def base_slug(key: str) -> str:
